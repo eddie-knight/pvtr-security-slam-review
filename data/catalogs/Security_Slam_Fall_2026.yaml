@@ -117,15 +117,17 @@ controls:
           - cra-readiness
         id: SLAM-CR-01.01
         recommendation: |
-          Follow the steward's CRA guidance: publish the CRA stewardship
-          statement verbatim in SECURITY.md, add the readiness checklist, and add
-          the steward escalation section to CONTRIBUTING.md.
+          Follow the steward's CRA guidance: decide whether the project is in
+          scope, publish the CRA stewardship statement (or the out-of-scope
+          statement) verbatim in SECURITY.md, link the reporting channel from
+          Security Insights, and add the steward escalation section to
+          CONTRIBUTING.md.
         state: Active
         text: |
-          The project MUST link its security policy and contributing guide from
-          Security Insights, carry the LF CRA stewardship statement verbatim in
-          SECURITY.md, and document its readiness checklist and steward
-          escalation path.
+          The project MUST link its security policy from Security Insights and
+          carry the LF CRA stewardship statement, or the out-of-scope statement,
+          verbatim in SECURITY.md. An in-scope project MUST also link its
+          contributing guide and document its steward escalation path there.
     group: CR
     id: SLAM-CR-01
     objective: |

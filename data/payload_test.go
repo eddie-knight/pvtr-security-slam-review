@@ -1,0 +1,200 @@
+package data
+
+import (
+	"encoding/base64"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/google/go-github/v74/github"
+	"github.com/privateerproj/privateer-sdk/config"
+)
+
+// fakeGitHub serves the contents API from files (path -> content). Paths
+// under .github/workflows/ are also listed as that directory.
+func fakeGitHub(t *testing.T, files map[string]string) *github.Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, ok := strings.CutPrefix(r.URL.Path, "/repos/o/r/contents/")
+		switch {
+		case r.URL.Path == "/repos/o/r":
+			_, _ = fmt.Fprint(w, `{"default_branch":"main"}`)
+		case ok && path == "":
+			var entries []string
+			for name := range files {
+				if !strings.Contains(name, "/") {
+					entries = append(entries, fmt.Sprintf(`{"type":"file","name":%q,"path":%q}`, name, name))
+				}
+			}
+			_, _ = fmt.Fprintf(w, "[%s]", strings.Join(entries, ","))
+		case ok && path == ".github/workflows":
+			var entries []string
+			for name := range files {
+				if strings.HasPrefix(name, ".github/workflows/") {
+					entries = append(entries, fmt.Sprintf(`{"type":"file","name":"x","path":%q}`, name))
+				}
+			}
+			if entries == nil {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = fmt.Fprintf(w, "[%s]", strings.Join(entries, ","))
+		case ok && files[path] != "":
+			_, _ = fmt.Fprintf(w, `{"type":"file","encoding":"base64","content":%q}`,
+				base64.StdEncoding.EncodeToString([]byte(files[path])))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := github.NewClient(nil)
+	client.BaseURL, _ = url.Parse(server.URL + "/")
+	return client
+}
+
+const validInsights = "header:\n  schema-version: 2.2.0\n  url: https://example.com/o/r\n"
+
+func loadFake(t *testing.T, files map[string]string) *Payload {
+	t.Helper()
+	p := &Payload{Owner: "o", Repo: "r", ghClient: fakeGitHub(t, files), cache: &payloadCache{}}
+	if err := p.load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	return p
+}
+
+func TestLoadFindsMisnamedInsights(t *testing.T) {
+	p := loadFake(t, map[string]string{"SECURITY-INSIGHTS.yml": validInsights, "README.md": "hi"})
+	if p.DefaultBranch != "main" || p.InsightsPath != "SECURITY-INSIGHTS.yml" || p.InsightsError != nil {
+		t.Fatalf("got branch %q path %q err %v", p.DefaultBranch, p.InsightsPath, p.InsightsError)
+	}
+	if p.Insights.Header.URL.String() != "https://example.com/o/r" || string(p.InsightsRaw) != validInsights {
+		t.Fatalf("insights not loaded: %+v", p.Insights.Header)
+	}
+}
+
+func TestLoadInsightsParseError(t *testing.T) {
+	p := loadFake(t, map[string]string{"security-insights.yml": "not: [valid"})
+	if p.InsightsError == nil || p.InsightsRaw == nil {
+		t.Fatalf("want parse error with raw bytes kept, got err %v", p.InsightsError)
+	}
+	// nested pointers are initialized even when parsing failed
+	_ = p.Insights.Project.VulnerabilityReporting.Contact.Email
+	_ = p.Insights.Repository.ReleaseDetails
+}
+
+func TestFindSecurityInsightsFilePrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		entries []string
+		want    string
+	}{
+		{[]string{"Security-Insights.yml", "security-insights.yaml"}, "security-insights.yaml"},
+		{[]string{"SECURITY-INSIGHTS.YAML", "Security-Insights.yml"}, "Security-Insights.yml"},
+		{[]string{"README.md"}, ""},
+	} {
+		if got := findSecurityInsightsFile(tc.entries); got != tc.want {
+			t.Errorf("%v: got %q, want %q", tc.entries, got, tc.want)
+		}
+	}
+}
+
+func TestGetWorkflowFiles(t *testing.T) {
+	p := loadFake(t, map[string]string{".github/workflows/ci.yml": "on: push"})
+	files, err := p.GetWorkflowFiles()
+	if err != nil || len(files) != 1 || string(files[0].Content) != "on: push" {
+		t.Fatalf("got %+v, %v", files, err)
+	}
+
+	p = loadFake(t, map[string]string{"README.md": "hi"})
+	if files, err := p.GetWorkflowFiles(); err != nil || files != nil {
+		t.Fatalf("missing dir: got %+v, %v", files, err)
+	}
+}
+
+func TestRawGitHubURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://github.com/o/r/blob/main/docs/SECURITY.md#L3": "https://raw.githubusercontent.com/o/r/main/docs/SECURITY.md",
+		"https://github.com/o/r/tree/main/docs":                "https://github.com/o/r/tree/main/docs",
+		"https://example.com/o/r/blob/main/x":                  "https://example.com/o/r/blob/main/x",
+	} {
+		u, _ := url.Parse(in)
+		if got := rawGitHubURL(u); got != want {
+			t.Errorf("%s: got %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestFetchURL(t *testing.T) {
+	big := strings.Repeat("a", MaxFetchedBodyBytes+10)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("credentials sent to %s", r.URL)
+		}
+		switch r.URL.Path {
+		case "/big":
+			_, _ = fmt.Fprint(w, big)
+		case "/moved":
+			http.Redirect(w, r, "/big", http.StatusFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	p := &Payload{plainClient: server.Client()}
+
+	got, err := p.FetchURL(server.URL + "/moved")
+	if err != nil || !got.Truncated || len(got.Body) != MaxFetchedBodyBytes || got.FinalURL != server.URL+"/big" {
+		t.Fatalf("truncation/redirect: %v truncated=%v len=%d final=%s", err, got.Truncated, len(got.Body), got.FinalURL)
+	}
+	if got, err := p.FetchURL(server.URL + "/missing"); err != nil || got.StatusCode != http.StatusNotFound {
+		t.Fatalf("non-2xx should not error: %v %d", err, got.StatusCode)
+	}
+	if _, err := p.FetchURL("http://example.com/x"); err == nil {
+		t.Fatal("http URL should be rejected")
+	}
+}
+
+// The real Loader wiring must keep the GitHub token off non-GitHub hosts.
+func TestTokenNotSentToGrcStore(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("token sent to grc.store: %s", r.Header.Get("Authorization"))
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	p := newPayload(&config.Config{Vars: map[string]any{"token": "secret", "grc_store_url": server.URL}})
+	if target, err := p.GetGrcStoreTarget("ns", "id"); target != nil || err != nil {
+		t.Fatalf("404 should be (nil, nil), got %v, %v", target, err)
+	}
+}
+
+func TestGrcStore(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.RequestURI() {
+		case "/v1/targets/ns/a%2Fb/evaluations?limit=2":
+			_, _ = fmt.Fprint(w, `{"items":[{"log_version":"v2","result":"Passed","counts":{"passed":3}}]}`)
+		case "/v1/catalogs/ns/log/versions/v2":
+			_, _ = fmt.Fprint(w, `{"log":true}`)
+		default:
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = fmt.Fprint(w, `{"error":"upstream","detail":"down"}`)
+		}
+	}))
+	defer server.Close()
+	p := &Payload{grcStoreURL: server.URL}
+
+	evals, err := p.GetGrcStoreEvaluations("ns", "a/b", 2)
+	if err != nil || len(evals) != 1 || evals[0].LogVersion != "v2" || evals[0].Counts.Passed != 3 {
+		t.Fatalf("evaluations: %+v, %v", evals, err)
+	}
+	if raw, err := p.GetGrcStoreLog("ns", "log", "v2"); err != nil || string(raw) != `{"log":true}` {
+		t.Fatalf("log: %s, %v", raw, err)
+	}
+	if _, err := p.GetGrcStoreTarget("ns", "x"); err == nil || !strings.Contains(err.Error(), "down") {
+		t.Fatalf("want hub error detail, got %v", err)
+	}
+}

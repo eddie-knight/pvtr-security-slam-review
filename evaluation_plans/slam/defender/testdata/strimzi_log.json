@@ -1,0 +1,651 @@
+{
+ "evaluations": [
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-1",
+      "maturity-2",
+      "maturity-3"
+     ],
+     "end": "2026-10-25T17:12:42Z",
+     "message": "This control is enforced by GitHub for all projects",
+     "recommendation": "Enforce multi-factor authentication for the project's version\ncontrol system, requiring collaborators to provide a second form of\nauthentication when accessing sensitive data or modifying repository\nsettings. Passkeys are acceptable for this control.\n",
+     "requirement": {
+      "entry-id": "OSPS-AC-01.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Passed",
+     "start": "2026-10-25T17:12:42Z",
+     "steps-executed": 1
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-AC-01",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "This control is enforced by GitHub for all projects",
+   "name": "Use MFA for Sensitive Actions\n",
+   "result": "Passed"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Configure the project's CI/CD pipelines to assign the lowest available\npermissions to users and services by default, elevating permissions\nonly when necessary for specific tasks. In some version control\nsystems, this may be possible at the organizational or repository\nlevel. If not, set permissions at the top level of the pipeline.\n",
+     "requirement": {
+      "entry-id": "OSPS-AC-04.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-AC-04",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "Default token permissions are overridden by explicit permissions blocks in all workflow files",
+   "name": "Enforce Least Privilege on CI/CD Pipelines\n",
+   "result": "Passed"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-1",
+      "maturity-2",
+      "maturity-3"
+     ],
+     "end": "2026-10-25T17:12:42Z",
+     "message": "This is a retired control identifier, logged here for visibility only",
+     "requirement": {
+      "entry-id": "OSPS-BR-01.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run",
+     "start": "2026-10-25T17:12:42Z",
+     "steps-executed": 1
+    },
+    {
+     "applicability": [
+      "maturity-1",
+      "maturity-2",
+      "maturity-3"
+     ],
+     "end": "2026-10-25T17:12:42Z",
+     "message": "No untrusted-code checkout was detected, but these workflows run in a privileged context (fossa.yml, snyk.yml, system-tests.yml); static analysis cannot rule out credential exposure via artifact or cache poisoning, self-hosted runners, or untrusted build steps. Manual review required.",
+     "recommendation": "CI/CD pipelines should isolate untrusted code snapshots from\nprivileged credentials and assets. In particular, projects should be\ncareful to ensure that workflows which build or execute code prior\nto review by a collaborator do not have access to CI/CD credentials.\n",
+     "requirement": {
+      "entry-id": "OSPS-BR-01.03",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Needs Review",
+     "start": "2026-10-25T17:12:42Z",
+     "steps-executed": 1
+    },
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "CI/CD pipelines should sanitize (quote, escape or exit on expected\nvalues) all collaborator inputs on explicit workflow executions.\nWhile collaborators are generally trusted, manual inputs to a\nworkflow cannot be reviewed and could be abused by an account\ntakeover or insider threat.\n",
+     "requirement": {
+      "entry-id": "OSPS-BR-01.04",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-BR-01",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "No untrusted-code checkout was detected, but these workflows run in a privileged context (fossa.yml, snyk.yml, system-tests.yml); static analysis cannot rule out credential exposure via artifact or cache poisoning, self-hosted runners, or untrusted build steps. Manual review required.",
+   "name": "Prevent Untrusted Input When Building & Releasing\n",
+   "result": "Needs Review"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Assign a unique version identifier to each software asset produced by\nthe project, following a consistent naming convention or numbering\nscheme. Examples include SemVer, CalVer, or git commit id.\n",
+     "requirement": {
+      "entry-id": "OSPS-BR-02.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-BR-02",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "All releases found have a unique name",
+   "name": "Assign Unique Version Identifiers\n",
+   "result": "Passed"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-1"
+     ],
+     "message": "",
+     "recommendation": "Configure .gitignore or equivalent to exclude files that may contain sensitive information. Use pre-commit hooks and automated scanning tools to detect and prevent the inclusion of sensitive data in commits.\n",
+     "requirement": {
+      "entry-id": "OSPS-BR-07.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    },
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Document how secrets and credentials are managed and used within the project. This should include details on how secrets are stored (e.g., using a secrets management tool), how access is controlled, and how secrets are rotated or updated. Ensure that sensitive information is not hard-coded in the source code or stored in version control systems.\n",
+     "requirement": {
+      "entry-id": "OSPS-BR-07.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-BR-07",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "",
+   "name": "Secure Secrets and Credentials\n",
+   "result": "Not Run"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Instructions in the project should contain information about the\ntechnology used, the commands to run, and the expected output.\nWhen possible, avoid storing this documentation in the same location\nas the build and release pipeline to avoid a single breach\ncompromising both the software and the documentation for verifying the\nintegrity of the software.\n",
+     "requirement": {
+      "entry-id": "OSPS-DO-03.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    },
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "The expected identity may be in the form of key IDs used to sign,\nissuer and identity from a sigstore certificate, or other similar\nforms.\nWhen possible, avoid storing this documentation in the same location\nas the build and release pipeline to avoid a single breach\ncompromising both the software and the documentation for verifying the\nintegrity of the software.\n",
+     "requirement": {
+      "entry-id": "OSPS-DO-03.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-DO-03",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "",
+   "name": "Publish Provenance Verification Instructions\n",
+   "result": "Not Run"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "In order to communicate the scope and duration of support for the\nproject's released software assets, the project should have a\nSUPPORT.md file, a \"Support\" section in SECURITY.md, or\nother documentation explaining the support lifecycle,\nincluding the expected duration of support for each release, the\ntypes of support provided (e.g., bug fixes, security updates), and\nany relevant policies or procedures for obtaining support.\n",
+     "requirement": {
+      "entry-id": "OSPS-DO-04.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-DO-04",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "",
+   "name": "Publish Support Scope and Duration\n",
+   "result": "Not Run"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "In order to communicate the scope and duration of support for security\nfixes, the project should have a SUPPORT.md or other documentation\nexplaining the project's policy for security updates.\n",
+     "requirement": {
+      "entry-id": "OSPS-DO-05.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-DO-05",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "",
+   "name": "Document Security Update Scope and Duration\n",
+   "result": "Not Run"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Publish an enforceable policy in the project documentation that\nrequires code collaborators to be reviewed and approved before being\ngranted escalated permissions to sensitive resources, such as merge\napproval or access to secrets. It is recommended that vetting includes\nestablishing a justifiable lineage of identity such as confirming the\ncontributor's association with a known trusted organization.\n",
+     "requirement": {
+      "entry-id": "OSPS-GV-04.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-GV-04",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "",
+   "name": "Require Formal Review of Permission Grants\n",
+   "result": "Not Run"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "It is recommended to auto-generate SBOMs at build time using a tool\nthat has been vetted for accuracy. This enables users to ingest this\ndata in a standardized approach alongside other projects in their\nenvironment.\n",
+     "requirement": {
+      "entry-id": "OSPS-QA-02.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-QA-02",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "Found 33 dependency manifests from GitHub API",
+   "name": "Publish Software Dependencies\n",
+   "result": "Passed"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-2",
+      "maturity-3"
+     ],
+     "end": "2026-10-25T17:12:43Z",
+     "message": "Some executed status checks are not mandatory but all should be: pre-commit, Analyze (java), Build Strimzi, Build docs, Build Containers (arm64), Build Containers (amd64), Unit Tests, Build Containers (ppc64le), Integration Tests (kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f), Build Containers (s390x), Integration Tests (kindest/node:v1.32.11@sha256:5fc52d52a7b9574015299724bd68f183702956aa4a2116ae75a63cb574b35af8), Build Gate, CodeQL, codecov/project, codecov/patch (NOTE: Not continuing to evaluate branch protection: combining requirements in rulesets and branch protection is not recommended)",
+     "recommendation": "Configure the project's version control system to require that all\nautomated status checks pass or require manual acknowledgement before a\ncommit can be merged into the primary branch. It is recommended that\nany optional status checks are NOT configured as a pass or fail\nrequirement that approvers may be tempted to bypass.\n",
+     "requirement": {
+      "entry-id": "OSPS-QA-03.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Failed",
+     "start": "2026-10-25T17:12:43Z",
+     "steps-executed": 1
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-QA-03",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "Some executed status checks are not mandatory but all should be: pre-commit, Analyze (java), Build Strimzi, Build docs, Build Containers (arm64), Build Containers (amd64), Unit Tests, Build Containers (ppc64le), Integration Tests (kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f), Build Containers (s390x), Integration Tests (kindest/node:v1.32.11@sha256:5fc52d52a7b9574015299724bd68f183702956aa4a2116ae75a63cb574b35af8), Build Gate, CodeQL, codecov/project, codecov/patch (NOTE: Not continuing to evaluate branch protection: combining requirements in rulesets and branch protection is not recommended)",
+   "name": "Address Pass/Fail Checks Before Accepting Changes\n",
+   "result": "Failed"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Any additional subproject code repositories produced by the project\nand compiled into a release must enforce security requirements as\napplicable to the status and intent of the respective codebase.\nIn addition to following the corresponding OSPS Baseline requirements,\nthis may include requiring a security review, ensuring that it is\nfree of vulnerabilities, and ensuring that it is free of known\nsecurity issues.\n",
+     "requirement": {
+      "entry-id": "OSPS-QA-04.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-QA-04",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "Insights contains a list of repositories",
+   "name": "Enforce Security Requirements on All Codebases\n",
+   "result": "Passed"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Add a section to the contributing documentation that explains how to\nrun the tests locally and how to run the tests in the CI/CD pipeline.\nThe documentation should explain what the tests are testing and how to\ninterpret the results.\n",
+     "requirement": {
+      "entry-id": "OSPS-QA-06.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    },
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Add a section to the contributing documentation that explains the\npolicy for adding or updating tests. The policy should explain what\nconstitutes a major change and what tests should be added or updated.\n",
+     "requirement": {
+      "entry-id": "OSPS-QA-06.03",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-QA-06",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "20 status checks were run",
+   "name": "Use Automated Testing in CI/CD Pipelines\n",
+   "result": "Passed"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Configure the project's version control system to require at least one\nnon-author human approval of changes before merging into the release or\nprimary branch. This can be achieved by requiring a pull request to be\nreviewed and approved by at least one other collaborator before it can\nbe merged.\n",
+     "requirement": {
+      "entry-id": "OSPS-QA-07.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-QA-07",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "",
+   "name": "Require Merge Approvals\n",
+   "result": "Not Run"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-2",
+      "maturity-3"
+     ],
+     "confidence-level": "Low",
+     "end": "2026-10-25T17:12:43Z",
+     "message": "No design documentation file found, but detailed guide specified in Security Insights - manual review needed to confirm design documentation with actions and actors",
+     "recommendation": "Include designs in the project documentation that explains the actions\nand actors. Actors include any subsystem or entity that can influence\nanother segment in the system.\nEnsure this is updated for new features or breaking changes.\n",
+     "requirement": {
+      "entry-id": "OSPS-SA-01.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Needs Review",
+     "start": "2026-10-25T17:12:43Z",
+     "steps-executed": 1
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-SA-01",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "No design documentation file found, but detailed guide specified in Security Insights - manual review needed to confirm design documentation with actions and actors",
+   "name": "Publish Design Descriptions of System Actors and Actions\n",
+   "result": "Needs Review"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-2",
+      "maturity-3"
+     ],
+     "confidence-level": "Low",
+     "end": "2026-10-25T17:12:43Z",
+     "message": "No external interface documentation file found in root, but found directories that may contain API documentation: api, documentation - manual review needed to confirm all external interfaces are documented",
+     "recommendation": "Document all software interfaces (APIs) of the released software\nassets, explaining how users can interact with the software and what\ndata is expected or produced.\nEnsure this is updated for new features or breaking changes.\n",
+     "requirement": {
+      "entry-id": "OSPS-SA-02.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Needs Review",
+     "start": "2026-10-25T17:12:43Z",
+     "steps-executed": 1
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-SA-02",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "No external interface documentation file found in root, but found directories that may contain API documentation: api, documentation - manual review needed to confirm all external interfaces are documented",
+   "name": "Publish External Interface Descriptions\n",
+   "result": "Needs Review"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-2",
+      "maturity-3"
+     ],
+     "confidence-level": "Low",
+     "end": "2026-10-25T17:12:43Z",
+     "message": "Security Insights declares a self security assessment, but its coverage and sufficiency require manual or AI-assisted review",
+     "recommendation": "Performing a security assessment informs both project members as well\nas downstream consumers that the project understands what problems\ncould arise within the software. Understanding what threats could be\nrealized helps the project manage and address risk. This information\nis useful to downstream consumers to demonstrate the security acumen\nand practices of the project.\nEnsure this is updated for new features or breaking changes.\n",
+     "requirement": {
+      "entry-id": "OSPS-SA-03.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Needs Review",
+     "start": "2026-10-25T17:12:43Z",
+     "steps-executed": 1
+    },
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Threat modeling is an activity where the project looks at the\ncodebase, associated processes and infrastructure, interfaces, key\ncomponents and \"thinks like a hacker\" and brainstorms how the system\nbe be broken or compromised. Each identified threat is listed out so\nthe project can then think about how to proactively avoid or close off\nany gaps/vulnerabilities that could arise.\nEnsure this is updated for new features or breaking changes.\n",
+     "requirement": {
+      "entry-id": "OSPS-SA-03.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-SA-03",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "Security Insights declares a self security assessment, but its coverage and sufficiency require manual or AI-assisted review",
+   "name": "Maintain a Project Security Assessment\n",
+   "result": "Needs Review"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-1"
+     ],
+     "message": "",
+     "recommendation": "Create a security.md (or similarly-named) file that contains security\ncontacts for the project.\n",
+     "requirement": {
+      "entry-id": "OSPS-VM-02.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-VM-02",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "",
+   "name": "Publish Contacts and Process for Reporting Vulnerabilities.\n",
+   "result": "Not Run"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Establish a VEX feed communicating the exploitability status of\nknown vulnerabilities, including assessment details or any\nmitigations in place preventing vulnerable code from being\nexecuted.\n",
+     "requirement": {
+      "entry-id": "OSPS-VM-04.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-VM-04",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "5 published GitHub security advisory(ies) publicly document discovered vulnerabilities",
+   "name": "Publish Discovered Vulnerabilities\n",
+   "result": "Passed"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Document a policy in the project that defines a threshold for\nremediation of SCA findings related to vulnerabilities and licenses.\nInclude the process for identifying, prioritizing, and remediating\nthese findings.\n",
+     "requirement": {
+      "entry-id": "OSPS-VM-05.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    },
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Document a policy in the project to address applicable Software\nComposition Analysis results before any release, and add status checks\nthat verify compliance with that policy prior to release.\n",
+     "requirement": {
+      "entry-id": "OSPS-VM-05.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    },
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Create a status check in the project's version control system that\nruns a Software Composition Analysis tool on all changes\nto the codebase. Require that the status check passes before changes\ncan be merged.\n",
+     "requirement": {
+      "entry-id": "OSPS-VM-05.03",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-VM-05",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "",
+   "name": "Publish and Enforce a Dependency Remediation Policy\n",
+   "result": "Not Run"
+  },
+  {
+   "assessment-logs": [
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Document a policy in the project that defines a threshold for\nremediation of Static Application Security Testing (SAST) findings.\nInclude the process for identifying, prioritizing, and remediating\nthese findings.\n",
+     "requirement": {
+      "entry-id": "OSPS-VM-06.01",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    },
+    {
+     "applicability": [
+      "maturity-3"
+     ],
+     "message": "",
+     "recommendation": "Create a status check in the project's version control system that\nruns a Static Application Security Testing (SAST) tool on all changes\nto the codebase. Require that the status check passes before changes\ncan be merged.\n",
+     "requirement": {
+      "entry-id": "OSPS-VM-06.02",
+      "reference-id": "osps-baseline-2026-08"
+     },
+     "result": "Not Run"
+    }
+   ],
+   "control": {
+    "entry-id": "OSPS-VM-06",
+    "reference-id": "osps-baseline-2026-08"
+   },
+   "message": "",
+   "name": "Publish and Enforce an Application Security Testing Policy\n",
+   "result": "Not Run"
+  }
+ ],
+ "metadata": {
+  "author": {
+   "id": "openssf/github-repo",
+   "name": "github-repo",
+   "type": "Software",
+   "uri": "https://github.com/ossf/pvtr-github-repo-scanner",
+   "version": "0.33.0"
+  },
+  "date": "2026-10-25T17:12:43Z",
+  "description": "Privateer evaluation of service 'strimzi-kafka-operator' against control catalog 'osps-baseline-2026-08'",
+  "gemara-version": "v1.5.0",
+  "id": "strimzi-kafka-operator_osps-baseline-2026-08",
+  "type": "EvaluationLog",
+  "version": "1.3.0-20261025T171208Z"
+ },
+ "result": "Failed",
+ "target": {
+  "id": "strimzi/strimzi-kafka-operator",
+  "name": "strimzi/strimzi-kafka-operator",
+  "type": "Software",
+  "uri": "https://github.com/strimzi/strimzi-kafka-operator",
+  "version": "1.3.0"
+ }
+}

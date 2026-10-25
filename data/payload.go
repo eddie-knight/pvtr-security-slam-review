@@ -1,21 +1,25 @@
 package data
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/google/go-github/v74/github"
+	"github.com/hashicorp/go-hclog"
 	"github.com/ossf/si-tooling/v2/si"
 	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/privateerproj/privateer-sdk/pluginkit"
+	"golang.org/x/oauth2"
 )
 
 // DefaultGrcStoreURL is the public grc.store hub API. Override it with the
 // optional grc_store_url var (e.g. a preview hub).
 const DefaultGrcStoreURL = "https://hub.grc.store"
-
-var errNotImplemented = errors.New("not implemented")
 
 // Payload is everything a step may read. The Loader fills the eager fields;
 // the methods fetch lazily and cache in the shared payloadCache, because steps
@@ -171,39 +175,213 @@ func (p Payload) ClearEvidence() {
 // Loader builds the Payload: repository metadata, root listing, and the
 // Security Insights file. Everything else is fetched lazily by the methods.
 func Loader(config *config.Config) (payload any, err error) {
-	return nil, errNotImplemented
+	p := newPayload(config)
+	if err := p.load(); err != nil {
+		return nil, err
+	}
+	return any(*p), nil
+}
+
+// newPayload wires the clients without touching the network.
+func newPayload(config *config.Config) *Payload {
+	// Count every request either client makes through this transport
+	callCounter := &pluginkit.APICallCounter{}
+	httpClient := callCounter.WrapClient(oauth2.NewClient(context.Background(), oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: config.GetString("token")},
+	)))
+	grcStoreURL := strings.TrimSuffix(config.GetString("grc_store_url"), "/")
+	if grcStoreURL == "" {
+		grcStoreURL = DefaultGrcStoreURL
+	}
+	return &Payload{
+		APICallCounter: callCounter,
+		Evidence:       &gemara.EvidenceCollector{},
+		Config:         config,
+		Owner:          config.GetString("owner"),
+		Repo:           config.GetString("repo"),
+		ghClient:       github.NewClient(httpClient),
+		httpClient:     httpClient,
+		plainClient:    callCounter.WrapClient(newPlainClient()),
+		grcStoreURL:    grcStoreURL,
+		cache:          &payloadCache{},
+	}
+}
+
+// load reads the eager fields. Only failing to read the repository itself is
+// an error; a missing or broken Security Insights file is a finding for steps.
+func (p *Payload) load() error {
+	ctx := context.Background()
+	repo, _, err := p.ghClient.Repositories.Get(ctx, p.Owner, p.Repo)
+	if err != nil {
+		return fmt.Errorf("failed to read repository %s/%s: %w", p.Owner, p.Repo, err)
+	}
+	p.DefaultBranch = repo.GetDefaultBranch()
+
+	_, root, _, err := p.ghClient.Repositories.GetContents(ctx, p.Owner, p.Repo, "",
+		&github.RepositoryContentGetOptions{Ref: p.DefaultBranch})
+	// An empty repository has no root listing: GitHub answers 404
+	if err != nil && !isNotFound(err) {
+		return fmt.Errorf("failed to list repository root: %w", err)
+	}
+	for _, entry := range root {
+		p.RootEntries = append(p.RootEntries, entry.GetName())
+	}
+
+	p.loadSecurityInsights()
+	return nil
+}
+
+func (p *Payload) loadSecurityInsights() {
+	p.InsightsPath = findSecurityInsightsFile(p.RootEntries)
+	if p.InsightsPath != "" {
+		raw, err := p.GetFileContent(p.InsightsPath)
+		if err == nil {
+			p.InsightsRaw = raw
+			var insights *si.SecurityInsights
+			if insights, err = si.Load(raw); err == nil {
+				p.Insights = *insights
+			}
+		}
+		if err != nil {
+			p.InsightsError = fmt.Errorf("failed to read security insights file %s: %w", p.InsightsPath, err)
+			p.logger().Error(p.InsightsError.Error())
+		}
+	}
+	p.ensureInsightsInitialized()
+}
+
+// findSecurityInsightsFile matches root entries against the spec's filenames
+// case-insensitively, so a misnamed file is still loaded (a separate step
+// reports the name). Exact case wins, then the order of
+// si.SecurityInsightsFilenames (.yml before .yaml).
+func findSecurityInsightsFile(entries []string) string {
+	names := si.SecurityInsightsFilenames()
+	for _, name := range names {
+		if slices.Contains(entries, name) {
+			return name
+		}
+	}
+	for _, name := range names {
+		for _, entry := range entries {
+			if strings.EqualFold(entry, name) {
+				return entry
+			}
+		}
+	}
+	return ""
+}
+
+// ensureInsightsInitialized fills nil pointers so steps can read nested
+// fields without nil checks.
+func (p *Payload) ensureInsightsInitialized() {
+	if p.Insights.Repository == nil {
+		p.Insights.Repository = &si.Repository{}
+	}
+	if p.Insights.Project == nil {
+		p.Insights.Project = &si.Project{}
+	}
+	if p.Insights.Repository.Documentation == nil {
+		p.Insights.Repository.Documentation = &si.RepositoryDocumentation{}
+	}
+	if p.Insights.Repository.ReleaseDetails == nil {
+		p.Insights.Repository.ReleaseDetails = &si.ReleaseDetails{}
+	}
+	if p.Insights.Project.Documentation == nil {
+		p.Insights.Project.Documentation = &si.ProjectDocumentation{}
+	}
+	if p.Insights.Project.VulnerabilityReporting.Contact == nil {
+		p.Insights.Project.VulnerabilityReporting.Contact = &si.Contact{}
+	}
+}
+
+func (p *Payload) logger() hclog.Logger {
+	if p.Config == nil || p.Config.Logger == nil {
+		return hclog.NewNullLogger()
+	}
+	return p.Config.Logger
+}
+
+func isNotFound(err error) bool {
+	var ghErr *github.ErrorResponse
+	return errors.As(err, &ghErr) && ghErr.Response != nil && ghErr.Response.StatusCode == http.StatusNotFound
 }
 
 // GetFileContent returns a repository file's bytes from the default branch.
+// Errors are cached too: a file that just failed fails the same way for every
+// step. A payload without a cache (as built directly in tests) calls through.
 func (p *Payload) GetFileContent(path string) ([]byte, error) {
-	return nil, errNotImplemented
+	if p.cache != nil {
+		if entry, ok := p.cache.files[path]; ok {
+			return entry.content, entry.err
+		}
+	}
+	content, err := p.fetchFileContent(path)
+	if p.cache != nil {
+		if p.cache.files == nil {
+			p.cache.files = make(map[string]fileCacheEntry)
+		}
+		p.cache.files[path] = fileCacheEntry{content: content, err: err}
+	}
+	return content, err
+}
+
+// shortcut: the contents API inlines files up to 1MB only; larger files error,
+// fetch download_url if a step ever needs one.
+func (p *Payload) fetchFileContent(path string) ([]byte, error) {
+	if p.ghClient == nil {
+		return nil, fmt.Errorf("payload missing GitHub client")
+	}
+	file, _, _, err := p.ghClient.Repositories.GetContents(context.Background(), p.Owner, p.Repo, path,
+		&github.RepositoryContentGetOptions{Ref: p.DefaultBranch})
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve file content for %s: %w", path, err)
+	}
+	if file == nil {
+		return nil, fmt.Errorf("%s is a directory, not a file", path)
+	}
+	content, err := file.GetContent()
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode file content for %s: %w", path, err)
+	}
+	return []byte(content), nil
 }
 
 // GetWorkflowFiles returns every file under .github/workflows on the default
-// branch.
+// branch. A repository without the directory has no workflows, not an error.
 func (p *Payload) GetWorkflowFiles() ([]WorkflowFile, error) {
-	return nil, errNotImplemented
+	if p.cache != nil && p.cache.workflowsL {
+		return p.cache.workflows, p.cache.workflowsE
+	}
+	files, err := p.fetchWorkflowFiles()
+	if p.cache != nil {
+		p.cache.workflows, p.cache.workflowsE, p.cache.workflowsL = files, err, true
+	}
+	return files, err
 }
 
-// FetchURL fetches an https URL declared in Security Insights, without GitHub
-// credentials. github.com blob URLs are fetched as their raw content.
-func (p *Payload) FetchURL(url string) (FetchedURL, error) {
-	return FetchedURL{}, errNotImplemented
-}
-
-// GetGrcStoreTarget returns the grc.store target, or (nil, nil) when the hub
-// reports it does not exist.
-func (p *Payload) GetGrcStoreTarget(namespace, id string) (*GrcStoreTarget, error) {
-	return nil, errNotImplemented
-}
-
-// GetGrcStoreEvaluations returns up to limit of the target's most recent
-// evaluations, newest first.
-func (p *Payload) GetGrcStoreEvaluations(namespace, id string, limit int) ([]GrcStoreEvaluation, error) {
-	return nil, errNotImplemented
-}
-
-// GetGrcStoreLog returns a published evaluation log version as raw JSON.
-func (p *Payload) GetGrcStoreLog(namespace, id, version string) ([]byte, error) {
-	return nil, errNotImplemented
+func (p *Payload) fetchWorkflowFiles() ([]WorkflowFile, error) {
+	if p.ghClient == nil {
+		return nil, fmt.Errorf("payload missing GitHub client")
+	}
+	const dir = ".github/workflows"
+	_, entries, _, err := p.ghClient.Repositories.GetContents(context.Background(), p.Owner, p.Repo, dir,
+		&github.RepositoryContentGetOptions{Ref: p.DefaultBranch})
+	if isNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to list %s: %w", dir, err)
+	}
+	var files []WorkflowFile
+	for _, entry := range entries {
+		if entry.GetType() != "file" {
+			continue
+		}
+		content, err := p.GetFileContent(entry.GetPath())
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, WorkflowFile{Path: entry.GetPath(), Content: content})
+	}
+	return files, nil
 }
