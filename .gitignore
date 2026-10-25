@@ -1,0 +1,12 @@
+# ignore the generated artifacts
+security-slam
+evaluation_results
+
+# ignore any local dev config file
+config.yml
+
+# go test coverage output
+coverage.out
+
+# ignore the local cache of claude
+.claude/

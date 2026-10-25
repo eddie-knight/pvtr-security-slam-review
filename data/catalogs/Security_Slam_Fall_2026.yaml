@@ -1,0 +1,194 @@
+controls:
+  - assessment-requirements:
+      - applicability:
+          - cleaner
+        id: SLAM-CL-01.01
+        recommendation: |
+          Publish security-insights.yml at the root of the repository. Build it
+          with the Security Insights Editor (https://security-insights.openssf.org/editor/)
+          and keep it valid with the Security Insights Action.
+        state: Active
+        text: |
+          The repository MUST have a lowercase security-insights.yml file at its
+          root that validates against the current Security Insights schema and
+          contains every field the specification marks as required.
+    group: CL
+    id: SLAM-CL-01
+    objective: |
+      Give tools and adopters clean, structured security metadata for the
+      project.
+    state: Active
+    title: |
+      Cleaner
+  - assessment-requirements:
+      - applicability:
+          - chronicler
+        id: SLAM-CH-01.01
+        recommendation: |
+          Write the documentation the OSPS Baseline expects at the project's
+          maturity level and link each document from Security Insights.
+        state: Active
+        text: |
+          Every documentation link in Security Insights MUST resolve to a real
+          document that covers the topic it is declared for.
+    group: CH
+    id: SLAM-CH-01
+    objective: |
+      Ensure the project's documentation exists, is reachable, and says what
+      Security Insights claims it says.
+    state: Active
+    title: |
+      Chronicler
+  - assessment-requirements:
+      - applicability:
+          - mechanizer
+        id: SLAM-ME-01.01
+        recommendation: |
+          Wire the OSPS Baseline Action or the pvtr-publish-results workflow into
+          the default branch on a schedule, push, or release trigger, and list it
+          under repository.security.tools in Security Insights.
+        state: Active
+        text: |
+          Security Insights MUST list the OSPS Baseline scanner as a tool, and a
+          workflow on the default branch MUST run it on a recurring trigger
+          without using pull_request_target.
+    group: ME
+    id: SLAM-ME-01
+    objective: |
+      Make Baseline evaluation happen on its own rather than when a maintainer
+      remembers to run it.
+    state: Active
+    title: |
+      Mechanizer
+  - assessment-requirements:
+      - applicability:
+          - inspector
+        id: SLAM-IN-01.01
+        recommendation: |
+          Commit a Gemara threat catalog or an OSPS Self Assessment and reference
+          it from repository.security.assessments.self in Security Insights.
+        state: Active
+        text: |
+          Security Insights MUST reference a resolvable self-assessment that is
+          specific to the project and covers scope, governance, threats,
+          vulnerability management, and supply chain.
+    group: IN
+    id: SLAM-IN-01
+    objective: |
+      Document what the project does and how it could be attacked.
+    state: Active
+    title: |
+      Inspector
+  - assessment-requirements:
+      - applicability:
+          - defender
+        id: SLAM-DE-01.01
+        recommendation: |
+          Publish results with the pvtr-publish-results workflow from the default
+          branch and point the OSPS Baseline tool's results location in Security
+          Insights at the grc.store target page.
+        state: Active
+        text: |
+          A grc.store target declared in Security Insights MUST have recurring
+          OSPS Baseline results published by a trusted publisher bound to this
+          repository.
+      - applicability:
+          - defender
+        id: SLAM-DE-01.02
+        recommendation: |
+          Drive the failed controls to zero, and document evidence for the
+          controls the scanner cannot check in files linked from Security
+          Insights.
+        state: Active
+        text: |
+          The latest published OSPS Baseline result MUST report no failed
+          controls, and controls the scanner cannot check MUST have written
+          evidence a reviewer can follow.
+    group: DE
+    id: SLAM-DE-01
+    objective: |
+      Show, publicly and verifiably, that the project meets the OSPS Baseline
+      at its maturity level.
+    state: Active
+    title: |
+      Defender
+  - assessment-requirements:
+      - applicability:
+          - cra-readiness
+        id: SLAM-CR-01.01
+        recommendation: |
+          Follow the steward's CRA guidance: publish the CRA stewardship
+          statement verbatim in SECURITY.md, add the readiness checklist, and add
+          the steward escalation section to CONTRIBUTING.md.
+        state: Active
+        text: |
+          The project MUST link its security policy and contributing guide from
+          Security Insights, carry the LF CRA stewardship statement verbatim in
+          SECURITY.md, and document its readiness checklist and steward
+          escalation path.
+    group: CR
+    id: SLAM-CR-01
+    objective: |
+      Prepare the project for the voluntary CRA readiness practices its steward
+      asks for.
+    state: Active
+    title: |
+      CRA Readiness
+groups:
+  - description: |
+      Complete, valid Security Insights metadata.
+    id: CL
+    title: Cleaner
+  - description: |
+      OSPS Baseline documentation linked from Security Insights.
+    id: CH
+    title: Chronicler
+  - description: |
+      Automated, recurring OSPS Baseline evaluation.
+    id: ME
+    title: Mechanizer
+  - description: |
+      A structured security self-assessment.
+    id: IN
+    title: Inspector
+  - description: |
+      A passing, published OSPS Baseline result.
+    id: DE
+    title: Defender
+  - description: |
+      Voluntary EU Cyber Resilience Act readiness practices.
+    id: CR
+    title: CRA Readiness
+metadata:
+  applicability-groups:
+    - description: Security Insights file badge
+      id: cleaner
+      title: Cleaner
+    - description: Documentation badge
+      id: chronicler
+      title: Chronicler
+    - description: Automated Baseline evaluation badge
+      id: mechanizer
+      title: Mechanizer
+    - description: Self-assessment badge
+      id: inspector
+      title: Inspector
+    - description: Passing published Baseline badge
+      id: defender
+      title: Defender
+    - description: CRA readiness badge
+      id: cra-readiness
+      title: CRA Readiness
+  author:
+    id: security-slam
+    name: Security Slam Organizers
+    type: Human
+  description: >
+    Evidence checks for the Security Slam Fall 2026 project badges, as defined
+    at https://securityslam.com/library.
+  draft: true
+  gemara-version: 1.2.0
+  id: security-slam-fall-2026
+  type: ControlCatalog
+  version: v2026.10.25
+title: Security Slam Fall 2026 Badges

@@ -1,0 +1,26 @@
+loglevel: info # increase to trace for more verbose output
+write-directory: evaluation_results
+write: true # Change to false if you don't want to write the results to disk
+output: yaml # Change to json if you want CLI and written output in json format
+services:
+  <service_name>: # unique name/id for the evaluation
+    plugin: security-slam # required while running via Privateer
+    policy:
+      catalogs:
+        - security-slam-fall-2026
+      applicability: # the badges to check; list only the ones you want
+        - cleaner
+        - chronicler
+        - mechanizer
+        - inspector
+        - defender
+        - cra-readiness
+    vars:
+      owner: <github org or user name>
+      repo: <github repo name>
+      token: <github token with public repo read access>
+      # Optional: the AI review steps. Without these, AI steps return Needs Review.
+      ai_provider: anthropic
+      ai_model: claude-sonnet-5-5
+      ai_api_key: <anthropic api key>
+      # Optional: grc_store_url: https://hub.grc.store

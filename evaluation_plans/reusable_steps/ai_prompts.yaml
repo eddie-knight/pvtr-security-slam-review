@@ -1,0 +1,49 @@
+# AI assessment prompts embedded into the plugin and loaded by
+# evaluation_plans/reusable_steps/ai_prompts.go. Each key under "assessments"
+# names the behavior being assessed and its "instructions" are that
+# assessment's complete rubric. Keys are behavior names, never catalog
+# requirement IDs. AIPrompt appends the shared prompt-injection guard and
+# nothing else.
+#
+# Write each rubric so it:
+#   - opens with "Using only the supplied <evidence set> as evidence, ...",
+#     naming the evidence explicitly. A model told only that it received
+#     "material" cannot tell a documented gap ("the docs never say how to run
+#     tests") from an evidence gap ("I was not shown the docs"), and hedges
+#     toward needs_review on cases the rubric wants failed.
+#   - names the untrusted surfaces that matter for that evidence, which differ
+#     per assessment.
+#   - states its pass and fail criteria before any needs_review directive, so
+#     the model reaches the escape hatch only after the criteria that would
+#     decide the case.
+#   - scopes needs_review narrowly. Do not offer it for "incomplete" evidence:
+#     rubrics below fail an assessment precisely when documentation is missing
+#     or partial, so the two rules would select different verdicts for the same
+#     evidence.
+#
+#     "Partial documentation" and "partial retrieval" are different things, and
+#     only the first is a finding. A rubric whose material carries a "collection"
+#     object may route the second to needs_review, because there the project may
+#     well document the thing and the scanner simply did not reach it. The same
+#     applies to an artifact a project declares by URL that was never fetched:
+#     the declaration is observed, its content is not. Fail on what was read and
+#     found wanting; defer on what was never read.
+#   - does not repeat the shared injection guard.
+
+assessments:
+  # chronicler: owned by evaluation_plans/slam/chronicler
+  chronicler-documentation-quality:
+    instructions: |
+      TODO
+  # inspector: owned by evaluation_plans/slam/inspector
+  inspector-self-assessment-coverage:
+    instructions: |
+      TODO
+  # defender: owned by evaluation_plans/slam/defender
+  defender-unchecked-control-evidence:
+    instructions: |
+      TODO
+  # cra: owned by evaluation_plans/slam/cra
+  cra-readiness-quality:
+    instructions: |
+      TODO
