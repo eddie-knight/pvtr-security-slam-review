@@ -125,7 +125,7 @@ func Test_Strimzi(t *testing.T) {
 		}
 	}
 	result, message, _ := LatestResultHasNoFailures(payload)
-	want := "The latest OSPS Baseline result for strimzi/strimzi-kafka-operator (1.3.0-20261025T171208Z) reports 1 failed or unknown control(s) at maturity level 2: OSPS-QA-03.01"
+	want := "The latest OSPS Baseline result for strimzi/strimzi-kafka-operator (1.3.0-20261025T171208Z) reports 1 failed control(s) at maturity level 2: OSPS-QA-03.01"
 	if result != gemara.Failed || message != want {
 		t.Errorf("LatestResultHasNoFailures = %v %q, want Failed %q", result, message, want)
 	}
@@ -263,7 +263,7 @@ func Test_LatestResultHasNoFailures(t *testing.T) {
 	}{
 		{"all passed", 2, logWith(passedL1), nil, gemara.Passed, "no failed controls at maturity level 2"},
 		{"level as string", "2", logWith(passedL1), nil, gemara.Passed, "maturity level 2"},
-		{"unknown fails", 2, logWith(passedL1, unknownL1), nil, gemara.Failed, "OSPS-AC-02.01"},
+		{"unknown needs review", 2, logWith(passedL1, unknownL1), nil, gemara.NeedsReview, "OSPS-AC-02.01"},
 		{"level-1 scan against level 2", 2, logWith(passedL1, skippedL2), nil, gemara.Failed, "publish a scan at maturity level 2"},
 		{"level-2 skip ignored at level 1", 1, logWith(passedL1, skippedL2), nil, gemara.Passed, "maturity level 1"},
 		{"maturity-1-only entry ignored at level 2", 2, logWith(passedL1, failedL1), nil, gemara.Passed, "maturity level 2"},

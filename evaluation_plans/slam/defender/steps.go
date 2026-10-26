@@ -127,7 +127,8 @@ func TrustedPublisher(payload data.Payload) (result gemara.Result, message strin
 
 // LatestResultHasNoFailures requires every control of the newest published
 // OSPS Baseline result that applies at the project's maturity level to have
-// been evaluated without a failure.
+// been evaluated without a failure. An Unknown result is the scanner erroring,
+// not the project failing, so it needs review rather than failing the badge.
 func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	level, ok := reusable_steps.MaturityLevel(payload)
 	if !ok {
@@ -145,23 +146,28 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 	if err != nil {
 		return gemara.NeedsReview, fmt.Sprintf("Could not read the latest published log for %s/%s: %s; manual review needed", namespace, id, err), gemara.Low
 	}
-	var failed, skipped []string
+	var failed, skipped, unknown []string
 	for _, entry := range entries {
 		if !appliesAt(entry, level) {
 			continue
 		}
 		switch {
-		case entry.Result == gemara.Failed.String() || entry.Result == gemara.Unknown.String():
+		case entry.Result == gemara.Failed.String():
 			failed = append(failed, entry.Requirement.EntryID)
+		case entry.Result == gemara.Unknown.String():
+			unknown = append(unknown, fmt.Sprintf("%s (%s)", entry.Requirement.EntryID, entry.Message))
 		case entry.Result == gemara.NotRun.String() && entry.StepsExecuted == 0:
 			skipped = append(skipped, entry.Requirement.EntryID)
 		}
 	}
 	if len(failed) > 0 {
-		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports %d failed or unknown control(s) at maturity level %d: %s", namespace, id, latest.LogVersion, len(failed), level, strings.Join(failed, ", ")), gemara.High
+		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports %d failed control(s) at maturity level %d: %s", namespace, id, latest.LogVersion, len(failed), level, strings.Join(failed, ", ")), gemara.High
 	}
 	if len(skipped) > 0 {
 		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) did not evaluate %d control(s) that apply at maturity level %d (%s); publish a scan at maturity level %d", namespace, id, latest.LogVersion, len(skipped), level, strings.Join(skipped, ", "), level), gemara.High
+	}
+	if len(unknown) > 0 {
+		return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no failed controls at maturity level %d, but the scanner could not determine %d: %s", namespace, id, latest.LogVersion, level, len(unknown), strings.Join(unknown, "; ")), gemara.Medium
 	}
 	return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports no failed controls at maturity level %d", namespace, id, latest.LogVersion, level), gemara.High
 }
@@ -189,7 +195,7 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 	}
 	var unchecked []uncheckedControl
 	for _, entry := range entries {
-		if !appliesAt(entry, level) || (entry.Result != gemara.NeedsReview.String() && entry.Result != gemara.NotRun.String()) {
+		if !appliesAt(entry, level) || (entry.Result != gemara.NeedsReview.String() && entry.Result != gemara.NotRun.String() && entry.Result != gemara.Unknown.String()) {
 			continue
 		}
 		unchecked = append(unchecked, uncheckedControl{

@@ -6,6 +6,7 @@ import (
 	"html"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -21,6 +22,10 @@ var fetchURL = (*data.Payload).FetchURL
 const (
 	maxDocumentChars = 16 * 1024
 	maxMaterialChars = 128 * 1024
+	// A declared document this short is likely a pointer elsewhere (Meshery's
+	// SECURITY.md only links to its docs site), so its links are followed.
+	maxDelegatingChars = 2 * 1024
+	maxFollowedLinks   = 3
 )
 
 // docLink is one documentation URL declared in Security Insights, with the
@@ -181,7 +186,8 @@ func DocumentationLinksResolve(payload data.Payload) (result gemara.Result, mess
 type document struct {
 	SourceURL   string    `json:"source_url"`
 	Section     string    `json:"section,omitempty"`
-	DeclaredFor []docLink `json:"declared_for"`
+	DeclaredFor []docLink `json:"declared_for,omitempty"`
+	LinkedFrom  string    `json:"linked_from,omitempty"`
 	Content     string    `json:"content,omitempty"`
 	Truncated   bool      `json:"content_truncated,omitempty"`
 	FromSection bool      `json:"content_starts_at_section,omitempty"`
@@ -198,7 +204,7 @@ type documentationMaterial struct {
 	Collection collection `json:"collection"`
 }
 
-const collectionScope = "Each documentation URL declared in the Security Insights file, fetched once without credentials (github.com blob URLs as raw file content). HTML is reduced to text. No links within the documents were followed and no other repository files were read. Each document's content is capped at 16384 characters and all content together at 131072 characters; content_truncated marks a document cut at its cap, and not_included marks one left out at the total cap. A section names the URL fragment the declaration points at; the content is the whole document, except that a document over its cap starts at the Markdown heading matching the section when one is found (content_starts_at_section)."
+const collectionScope = "Each documentation URL declared in the Security Insights file, fetched once without credentials (github.com blob URLs as raw file content). HTML is reduced to text. Links were followed one hop only from declared documents shorter than 2048 characters, at most 3 per document; those pages carry linked_from instead of declared_for. No other repository files were read. Each document's content is capped at 16384 characters and all content together at 131072 characters; content_truncated marks a document cut at its cap, and not_included marks one left out at the total cap. A section names the URL fragment the declaration points at; the content is the whole document, except that a document over its cap starts at the Markdown heading matching the section when one is found (content_starts_at_section)."
 
 func AIReviewDocumentation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	material, sources, incomplete := documentationEvidence(payload)
@@ -226,6 +232,7 @@ func documentationEvidence(payload data.Payload) (string, []string, []string) {
 	}
 
 	total := 0
+	bodies := map[string]string{}
 	for i := range packet.Documents {
 		doc := &packet.Documents[i]
 		if isTemplated(doc.SourceURL) {
@@ -246,10 +253,8 @@ func documentationEvidence(payload data.Payload) (string, []string, []string) {
 			packet.Collection.NotRetrieved = append(packet.Collection.NotRetrieved, doc.SourceURL+": total content cap reached")
 			continue
 		}
-		text := string(fetched.Body)
-		if strings.Contains(strings.ToLower(fetched.ContentType), "html") {
-			text = htmlToText(text)
-		}
+		bodies[doc.SourceURL] = string(fetched.Body)
+		text := pageText(fetched)
 		limit := min(maxDocumentChars, maxMaterialChars-total)
 		doc.Truncated = fetched.Truncated
 		// A long document is cut at the cap, so start at the declared section
@@ -263,6 +268,36 @@ func documentationEvidence(payload data.Payload) (string, []string, []string) {
 		doc.Content = text
 		total += len(text)
 	}
+	// Declared documents keep the budget first; then follow short ones' links.
+	for i, declared := 0, len(packet.Documents); i < declared; i++ {
+		from := packet.Documents[i]
+		if from.Content == "" || len(from.Content) >= maxDelegatingChars {
+			continue
+		}
+		for _, link := range outboundLinks(from.SourceURL, bodies[from.SourceURL], index) {
+			index[link] = len(packet.Documents)
+			if total >= maxMaterialChars {
+				packet.Collection.NotRetrieved = append(packet.Collection.NotRetrieved, link+": total content cap reached")
+				continue
+			}
+			fetched, err := fetchURL(&payload, link)
+			if err != nil || fetched.StatusCode < 200 || fetched.StatusCode > 299 {
+				reason := fmt.Sprintf("HTTP %d", fetched.StatusCode)
+				if err != nil {
+					reason = err.Error()
+				}
+				packet.Collection.NotRetrieved = append(packet.Collection.NotRetrieved, link+": "+reason)
+				continue
+			}
+			doc := document{SourceURL: link, LinkedFrom: from.SourceURL, Truncated: fetched.Truncated}
+			doc.Content = pageText(fetched)
+			if limit := min(maxDocumentChars, maxMaterialChars-total); len(doc.Content) > limit {
+				doc.Content, doc.Truncated = strings.ToValidUTF8(doc.Content[:limit], ""), true
+			}
+			total += len(doc.Content)
+			packet.Documents = append(packet.Documents, doc)
+		}
+	}
 	material, _ := json.Marshal(packet) // only strings and bools: cannot fail
 	incomplete := packet.Collection.NotRetrieved
 	for _, doc := range packet.Documents {
@@ -271,6 +306,44 @@ func documentationEvidence(payload data.Payload) (string, []string, []string) {
 		}
 	}
 	return string(material), sources, incomplete
+}
+
+func pageText(fetched data.FetchedURL) string {
+	if strings.Contains(strings.ToLower(fetched.ContentType), "html") {
+		return htmlToText(string(fetched.Body))
+	}
+	return string(fetched.Body)
+}
+
+// pageLink matches Markdown links (group 1 is "!" for an image) and hrefs.
+var pageLink = regexp.MustCompile(`(!?)\[[^\[\]\n]*\]\(\s*<?([^)\s>]+)|(?i)href\s*=\s*["']([^"']+)["']`)
+
+// outboundLinks lists up to maxFollowedLinks https pages a document links to,
+// resolved against its URL, skipping images, fragments of itself, and URLs
+// already in seen.
+func outboundLinks(source, body string, seen map[string]int) []string {
+	base, err := url.Parse(source)
+	if err != nil {
+		return nil
+	}
+	base.Fragment = ""
+	var links []string
+	for _, match := range pageLink.FindAllStringSubmatch(body, -1) {
+		if match[1] == "!" || len(links) == maxFollowedLinks {
+			continue
+		}
+		ref, err := url.Parse(html.UnescapeString(match[2] + match[3]))
+		if err != nil {
+			continue
+		}
+		link := base.ResolveReference(ref)
+		link.Fragment = ""
+		if _, dup := seen[link.String()]; dup || link.Scheme != "https" || link.String() == base.String() || slices.Contains(links, link.String()) {
+			continue
+		}
+		links = append(links, link.String())
+	}
+	return links
 }
 
 var markdownHeading = regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.+?)[ \t#]*$`)

@@ -262,3 +262,37 @@ func TestLongDocumentStartsAtSection(t *testing.T) {
 		t.Errorf("document without a section was windowed")
 	}
 }
+
+// Meshery's SECURITY.md only points to its docs site, which names the private
+// reporting channel; a long document's links are not followed.
+func TestShortDocumentLinksFollowed(t *testing.T) {
+	const docsPage = "https://docs.example.org/security"
+	stubFetch(t, func(url string) (data.FetchedURL, error) {
+		switch url {
+		case securityURL:
+			return data.FetchedURL{URL: url, StatusCode: 200, Body: []byte("[![badge](https://img.example/b.svg)](https://ci.example/run)\nTo report a vulnerability see [security](" + docsPage + ") and [policy](SECURITY.md#top). Also <" + guideURL + ">.")}, nil
+		case docsPage:
+			return data.FetchedURL{URL: url, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>Email the private security@example.org list.</p>")}, nil
+		case guideURL:
+			return data.FetchedURL{URL: url, StatusCode: 200, Body: []byte(strings.Repeat("x", maxDelegatingChars) + "[ignored](https://ignored.example/)")}, nil
+		}
+		return okFetch(url)
+	})
+
+	material, _, _ := documentationEvidence(newPayload())
+
+	var packet documentationMaterial
+	if err := json.Unmarshal([]byte(material), &packet); err != nil {
+		t.Fatal(err)
+	}
+	var linked []string
+	for _, doc := range packet.Documents {
+		if doc.LinkedFrom != "" {
+			linked = append(linked, doc.SourceURL+" <- "+doc.LinkedFrom+": "+doc.Content)
+		}
+	}
+	want := []string{docsPage + " <- " + securityURL + ": Email the private security@example.org list."}
+	if strings.Join(linked, "\n") != strings.Join(want, "\n") {
+		t.Errorf("linked documents:\n%s\nwant:\n%s", strings.Join(linked, "\n"), strings.Join(want, "\n"))
+	}
+}
