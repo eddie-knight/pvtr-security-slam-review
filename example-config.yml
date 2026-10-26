@@ -2,9 +2,9 @@ loglevel: info # increase to trace for more verbose output
 write-directory: evaluation_results
 write: true # Change to false if you don't want to write the results to disk
 output: yaml # Change to json if you want CLI and written output in json format
-services:
-  <service_name>: # unique name/id for the evaluation
-    plugin: security-slam # required while running via Privateer
+targets:
+  <target_name>: # unique name/id for the evaluation
+    plugin: local/security-slam # the name pvtr gives a locally installed plugin
     policy:
       catalogs:
         - security-slam-fall-2026

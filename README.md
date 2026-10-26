@@ -106,3 +106,5 @@ Two things worth knowing:
 Questions or a result you think is wrong: open an issue on
 [eddie-knight/pvtr-security-slam-review](https://github.com/eddie-knight/pvtr-security-slam-review/issues).
 Include the badge, the requirement ID (for example `SLAM-CL-01.01`), and the message you got.
+
+For everything else about the Slam (badges, dates, submitting), see [securityslam.com](https://securityslam.com).
