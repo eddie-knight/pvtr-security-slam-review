@@ -114,8 +114,9 @@ type FetchedURL struct {
 	Truncated   bool
 }
 
-// MaxFetchedBodyBytes caps how much of a fetched document is kept.
-const MaxFetchedBodyBytes = 256 * 1024
+// MaxFetchedBodyBytes caps how much of a fetched document is kept. Docs-site
+// pages run past 256 KB of HTML (Meshery) and GitHub release pages past 512 KB.
+const MaxFetchedBodyBytes = 1024 * 1024
 
 // GrcStoreTarget is GET /v1/targets/{namespace}/{id}.
 type GrcStoreTarget struct {

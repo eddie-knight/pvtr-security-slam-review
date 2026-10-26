@@ -242,6 +242,26 @@ func TestDocumentationEvidenceCaps(t *testing.T) {
 	}
 }
 
+// A page past the old 16K cap, with its topic at the end (Meshery's release
+// support section), reaches the model whole.
+func TestLongDocumentSentWhole(t *testing.T) {
+	body := "# Build and release\n" + strings.Repeat("filler\n", 40*1024/7) + "## Release support\nThe last two minor releases are supported.\n"
+	stubFetch(t, func(url string) (data.FetchedURL, error) {
+		return data.FetchedURL{URL: url, StatusCode: 200, Body: []byte(body)}, nil
+	})
+
+	material, _, incomplete := documentationEvidence(newPayload())
+
+	var packet documentationMaterial
+	if err := json.Unmarshal([]byte(material), &packet); err != nil {
+		t.Fatal(err)
+	}
+	guide := packet.Documents[0]
+	if len(body) <= 16*1024 || guide.Content != body || guide.Truncated || len(incomplete) != 0 {
+		t.Errorf("got %d of %d chars, truncated=%v, incomplete=%v", len(guide.Content), len(body), guide.Truncated, incomplete)
+	}
+}
+
 func TestLongDocumentStartsAtSection(t *testing.T) {
 	body := "# Guide\n" + strings.Repeat("filler\n", maxDocumentChars) + "## Contributing!\nOpen a pull request.\n"
 	stubFetch(t, func(url string) (data.FetchedURL, error) {

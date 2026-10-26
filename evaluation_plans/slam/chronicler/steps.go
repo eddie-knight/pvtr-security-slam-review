@@ -20,8 +20,11 @@ import (
 var fetchURL = (*data.Payload).FetchURL
 
 const (
-	maxDocumentChars = 16 * 1024
-	maxMaterialChars = 128 * 1024
+	// Whole pages must reach the model: Meshery's GOVERNANCE.md is 56K
+	// characters and its build-and-release page 47K; one project's declared
+	// documents run to about 235K.
+	maxDocumentChars = 64 * 1024
+	maxMaterialChars = 256 * 1024
 	// A declared document this short is likely a pointer elsewhere (Meshery's
 	// SECURITY.md only links to its docs site), so its links are followed.
 	maxDelegatingChars = 2 * 1024
@@ -204,7 +207,7 @@ type documentationMaterial struct {
 	Collection collection `json:"collection"`
 }
 
-const collectionScope = "Each documentation URL declared in the Security Insights file, fetched once without credentials (github.com blob URLs as raw file content). HTML is reduced to text. Links were followed one hop only from declared documents shorter than 2048 characters, at most 3 per document; those pages carry linked_from instead of declared_for. No other repository files were read. Each document's content is capped at 16384 characters and all content together at 131072 characters; content_truncated marks a document cut at its cap, and not_included marks one left out at the total cap. A section names the URL fragment the declaration points at; the content is the whole document, except that a document over its cap starts at the Markdown heading matching the section when one is found (content_starts_at_section)."
+const collectionScope = "Each documentation URL declared in the Security Insights file, fetched once without credentials (github.com blob URLs as raw file content). HTML is reduced to text. Links were followed one hop only from declared documents shorter than 2048 characters, at most 3 per document; those pages carry linked_from instead of declared_for. No other repository files were read. Each document's content is capped at 65536 characters and all content together at 262144 characters; content_truncated marks a document cut at its cap, and not_included marks one left out at the total cap. A section names the URL fragment the declaration points at; the content is the whole document, except that a document over its cap starts at the Markdown heading matching the section when one is found (content_starts_at_section)."
 
 func AIReviewDocumentation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	material, sources, incomplete := documentationEvidence(payload)
