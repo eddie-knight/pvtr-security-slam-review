@@ -190,7 +190,7 @@ func TestSameRepoLinks(t *testing.T) {
 [arch](../../ARCHITECTURE.md) [specs](../../openspec/specs/) [self](README.md) [anchor](#scope)
 [ccc](https://github.com/finos/common-cloud-controls) [other repo](https://github.com/example/other/blob/main/x.md)
 [tree](https://github.com/example/widget/tree/main/docs) [escape](../../../../other/blob/main/y.md)
-<a href="https://github.com/example/widget/blob/main/SECURITY.md">policy</a>`
+<a href="https://github.com/example/widget/blob/main/SECURITY.md">policy</a> [pins](../../web/package-lock.json)`
 	want := []string{
 		"https://github.com/example/widget/blob/main/docs/security/capability-catalog.yaml",
 		"https://github.com/example/widget/blob/main/docs/security/threat-catalog.yaml",

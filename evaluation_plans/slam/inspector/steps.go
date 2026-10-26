@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -264,6 +265,10 @@ func documentContent(source string, fetched data.FetchedURL, budget *int, collec
 	return content
 }
 
+// lockfiles are machine-written dependency pins, often hundreds of
+// kilobytes, that would spend the budget without adding assessment content.
+var lockfiles = []string{"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "go.sum", "Cargo.lock", "poetry.lock", "Gemfile.lock", "composer.lock", "uv.lock"}
+
 var documentLink = regexp.MustCompile(`\]\(\s*<?([^)\s>]+)|(?i)href\s*=\s*["']([^"']+)["']`)
 
 // sameRepoLinks lists the links in a document at a github.com blob URL that
@@ -290,7 +295,7 @@ func sameRepoLinks(evidenceURL, body string) []string {
 		}
 		link := base.ResolveReference(ref)
 		link.Fragment, link.RawQuery = "", ""
-		if link.Scheme != "https" || !strings.EqualFold(link.Host, "github.com") || !strings.HasPrefix(strings.ToLower(link.Path), prefix) || strings.HasSuffix(link.Path, "/") || seen[link.String()] {
+		if link.Scheme != "https" || !strings.EqualFold(link.Host, "github.com") || !strings.HasPrefix(strings.ToLower(link.Path), prefix) || strings.HasSuffix(link.Path, "/") || slices.Contains(lockfiles, path.Base(link.Path)) || seen[link.String()] {
 			continue
 		}
 		seen[link.String()] = true
