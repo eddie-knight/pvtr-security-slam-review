@@ -183,3 +183,54 @@ func TestAIReviewSelfAssessmentWithoutAI(t *testing.T) {
 		t.Errorf("got %v, want NeedsReview", result)
 	}
 }
+
+func TestSameRepoLinks(t *testing.T) {
+	const index = "https://github.com/example/widget/blob/main/docs/security/README.md"
+	body := `[caps](capability-catalog.yaml) [threats](./threat-catalog.yaml#top) [again](threat-catalog.yaml)
+[arch](../../ARCHITECTURE.md) [specs](../../openspec/specs/) [self](README.md) [anchor](#scope)
+[ccc](https://github.com/finos/common-cloud-controls) [other repo](https://github.com/example/other/blob/main/x.md)
+[tree](https://github.com/example/widget/tree/main/docs) [escape](../../../../other/blob/main/y.md)
+<a href="https://github.com/example/widget/blob/main/SECURITY.md">policy</a>`
+	want := []string{
+		"https://github.com/example/widget/blob/main/docs/security/capability-catalog.yaml",
+		"https://github.com/example/widget/blob/main/docs/security/threat-catalog.yaml",
+		"https://github.com/example/widget/blob/main/ARCHITECTURE.md",
+		"https://github.com/example/widget/blob/main/SECURITY.md",
+	}
+	if got := sameRepoLinks(index, body); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if got := sameRepoLinks("https://widget.example.com/security", body); got != nil {
+		t.Errorf("non-GitHub evidence: got %v, want none", got)
+	}
+}
+
+// An index page is sent with the catalogs it links to; a missing link marks
+// the collection incomplete and is listed.
+func TestAIReviewSelfAssessmentFollowsLinks(t *testing.T) {
+	base := "https://github.com/example/widget/blob/main/docs/security/"
+	pages := map[string]data.FetchedURL{
+		base + "README.md":               {StatusCode: 200, Body: []byte("[caps](capability-catalog.yaml) [threats](threat-catalog.yaml) [gone](missing.md)")},
+		base + "capability-catalog.yaml": {StatusCode: 200, Body: []byte("capabilities: [WIDGET.CAP01]")},
+		base + "threat-catalog.yaml":     {StatusCode: 200, Body: []byte("threats: [WIDGET.THR01]")},
+		base + "missing.md":              {StatusCode: 404},
+	}
+	original := fetchURL
+	t.Cleanup(func() { fetchURL = original })
+	fetchURL = func(_ *data.Payload, url string) (data.FetchedURL, error) { return pages[url], nil }
+	client := &fakeAIClient{body: `{"result":"pass","confidence":"high","message":"m","explanation":"e"}`}
+	stubAIClient(t, client)
+
+	AIReviewSelfAssessment(newPayload(si.Assessment{Evidence: ptrTo(si.URL(base + "README.md"))}))
+
+	var packet selfAssessmentAIEvidence
+	if err := json.Unmarshal([]byte(client.content), &packet); err != nil {
+		t.Fatal(err)
+	}
+	if len(packet.Linked) != 2 || packet.Linked[1].Content != "threats: [WIDGET.THR01]" {
+		t.Errorf("linked = %+v, want both catalogs", packet.Linked)
+	}
+	if packet.Collection.Complete || len(packet.Collection.Unretrieved) != 1 || !strings.Contains(packet.Collection.Unretrieved[0], "missing.md: HTTP 404") {
+		t.Errorf("collection = %+v, want incomplete with missing.md listed", packet.Collection)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -17,6 +18,11 @@ const behavior = "inspector-self-assessment-coverage"
 // maxAssessmentContentBytes keeps the material well inside a model's context
 // even for a long written assessment.
 const maxAssessmentContentBytes = 48 * 1024
+
+// maxLinkedDocuments caps the same-repository files linked from the evidence
+// document that are sent with it, for an index page such as a README that
+// lists the catalogs.
+const maxLinkedDocuments = 8
 
 var fetchURL = (*data.Payload).FetchURL
 
@@ -73,19 +79,21 @@ type assessmentDocument struct {
 }
 
 type evidenceCollectionMetadata struct {
-	Complete bool   `json:"complete"`
-	Scope    string `json:"scope"`
-	Note     string `json:"note,omitempty"`
+	Complete    bool     `json:"complete"`
+	Scope       string   `json:"scope"`
+	Note        string   `json:"note,omitempty"`
+	Unretrieved []string `json:"unretrieved,omitempty"`
 }
 
 type selfAssessmentAIEvidence struct {
 	Project        projectIdentity            `json:"project"`
 	SelfAssessment assessmentDeclaration      `json:"self_assessment_declaration"`
 	Document       assessmentDocument         `json:"self_assessment"`
+	Linked         []assessmentDocument       `json:"linked_documents,omitempty"`
 	Collection     evidenceCollectionMetadata `json:"collection"`
 }
 
-const evidenceCollectionScope = "Only the single document at the Security Insights repository.security.assessments.self.evidence URL. Links within it, other repository files, and companion files (such as a Gemara capability catalog referenced by a threat catalog) were not retrieved. HTML pages are reduced to their text. Complete means the whole declared document was supplied, not that the assessment is current or accurate."
+const evidenceCollectionScope = "The document at the Security Insights repository.security.assessments.self.evidence URL, plus up to 8 files it links to in the same GitHub repository (linked_documents), in link order, within one shared content budget. Links to other sites, files those linked files reference, and repository files nothing links to were not retrieved. HTML pages are reduced to their text. Complete means every supplied document is whole and every same-repository link was retrieved, not that the assessment is current or accurate."
 
 func AIReviewSelfAssessment(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	url := selfAssessmentURL(payload)
@@ -108,24 +116,90 @@ func AIReviewSelfAssessment(payload data.Payload) (result gemara.Result, message
 	if self.Name != nil {
 		packet.SelfAssessment.Name = *self.Name
 	}
-	content := string(fetched.Body)
-	if strings.Contains(strings.ToLower(fetched.ContentType), "text/html") {
-		content = htmlToText(content)
-	}
-	if len(content) > maxAssessmentContentBytes {
-		content = strings.ToValidUTF8(content[:maxAssessmentContentBytes], "")
+	budget := maxAssessmentContentBytes
+	packet.Document.Content = documentContent(fetched, &budget, &packet.Collection)
+	sources := []string{url}
+	for i, link := range sameRepoLinks(url, string(fetched.Body)) {
+		if i == maxLinkedDocuments || budget == 0 {
+			packet.Collection.Complete = false
+			packet.Collection.Unretrieved = append(packet.Collection.Unretrieved, link+" (limit reached)")
+			continue
+		}
+		linked, err := fetchURL(&payload, link)
+		switch {
+		case err != nil:
+			packet.Collection.Unretrieved = append(packet.Collection.Unretrieved, link+": "+err.Error())
+		case linked.StatusCode < 200 || linked.StatusCode > 299:
+			packet.Collection.Unretrieved = append(packet.Collection.Unretrieved, fmt.Sprintf("%s: HTTP %d", link, linked.StatusCode))
+		default:
+			packet.Linked = append(packet.Linked, assessmentDocument{SourceURL: link, FinalURL: linked.FinalURL, ContentType: linked.ContentType, Content: documentContent(linked, &budget, &packet.Collection)})
+			sources = append(sources, link)
+			continue
+		}
 		packet.Collection.Complete = false
 	}
-	packet.Document.Content = content
 	if !packet.Collection.Complete {
-		packet.Collection.Note = "The document was truncated; the content ends before the end of the declared document."
+		packet.Collection.Note = "Some content is missing: a document was truncated (its content ends early) or a linked file listed in unretrieved was not supplied."
 	}
 
 	material, err := json.Marshal(packet)
 	if err != nil {
 		return gemara.NeedsReview, "Self-assessment evidence could not be prepared for AI review: " + err.Error(), gemara.Low
 	}
-	return reusable_steps.AIReview(payload, behavior, string(material), []string{url})
+	return reusable_steps.AIReview(payload, behavior, string(material), sources)
+}
+
+// documentContent is the fetched text, HTML reduced to words, cut to what is
+// left of budget. Truncation marks the collection incomplete.
+func documentContent(fetched data.FetchedURL, budget *int, collection *evidenceCollectionMetadata) string {
+	content := string(fetched.Body)
+	if strings.Contains(strings.ToLower(fetched.ContentType), "text/html") {
+		content = htmlToText(content)
+	}
+	if fetched.Truncated {
+		collection.Complete = false
+	}
+	if len(content) > *budget {
+		content = strings.ToValidUTF8(content[:*budget], "")
+		collection.Complete = false
+	}
+	*budget -= len(content)
+	return content
+}
+
+var documentLink = regexp.MustCompile(`\]\(\s*<?([^)\s>]+)|(?i)href\s*=\s*["']([^"']+)["']`)
+
+// sameRepoLinks lists the links in a document at a github.com blob URL that
+// resolve to other files in the same repository, in order, without
+// duplicates or fragments.
+// shortcut: only github.com blob evidence URLs; add raw.githubusercontent.com and docs sites if projects declare those as index pages.
+func sameRepoLinks(evidenceURL, body string) []string {
+	base, err := url.Parse(evidenceURL)
+	if err != nil || !strings.EqualFold(base.Host, "github.com") {
+		return nil
+	}
+	parts := strings.SplitN(base.Path, "/", 5) // "", owner, repo, "blob", rest
+	if len(parts) != 5 || parts[3] != "blob" {
+		return nil
+	}
+	prefix := strings.ToLower(strings.Join(parts[:4], "/") + "/")
+	base.Fragment, base.RawQuery = "", ""
+	seen := map[string]bool{base.String(): true}
+	var links []string
+	for _, match := range documentLink.FindAllStringSubmatch(body, -1) {
+		ref, err := url.Parse(html.UnescapeString(match[1] + match[2]))
+		if err != nil {
+			continue
+		}
+		link := base.ResolveReference(ref)
+		link.Fragment, link.RawQuery = "", ""
+		if link.Scheme != "https" || !strings.EqualFold(link.Host, "github.com") || !strings.HasPrefix(strings.ToLower(link.Path), prefix) || strings.HasSuffix(link.Path, "/") || seen[link.String()] {
+			continue
+		}
+		seen[link.String()] = true
+		links = append(links, link.String())
+	}
+	return links
 }
 
 var (
