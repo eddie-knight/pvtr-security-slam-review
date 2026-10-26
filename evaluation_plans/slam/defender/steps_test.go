@@ -125,7 +125,7 @@ func Test_Strimzi(t *testing.T) {
 		}
 	}
 	result, message, _ := LatestResultHasNoFailures(payload)
-	want := "The latest OSPS Baseline result for strimzi/strimzi-kafka-operator (1.3.0-20261025T171208Z) reports 1 failed control(s) at maturity level 2: OSPS-QA-03.01"
+	want := "The latest OSPS Baseline result for strimzi/strimzi-kafka-operator (1.3.0-20261025T171208Z, scanner 0.33.0) reports 1 failed control(s) at maturity level 2: OSPS-QA-03.01"
 	if result != gemara.Failed || message != want {
 		t.Errorf("LatestResultHasNoFailures = %v %q, want Failed %q", result, message, want)
 	}
@@ -258,6 +258,10 @@ const (
 	// skippedL1Only is what a level-2 scan publishes for a control the
 	// scanner's catalog tags maturity-1 only.
 	skippedL1Only = `{"requirement":{"entry-id":"OSPS-BR-07.01"},"result":"Not Run","applicability":["maturity-1"],"steps-executed":0}`
+	// staleBinaryScan and staleWorkflowParse are the scanner bugs fixed in
+	// v0.33.1 (#519, #520), as an older scanner published them.
+	staleBinaryScan    = `{"requirement":{"entry-id":"OSPS-QA-05.01"},"result":"Unknown","message":"Error while scanning repository for binaries, potentially due to repo size. See logs for details.","applicability":["maturity-1","maturity-2","maturity-3"],"steps-executed":1}`
+	staleWorkflowParse = `{"requirement":{"entry-id":"OSPS-BR-01.01"},"result":"Needs Review","message":"Unable to evaluate 1 of 9 workflow files, manual review required: .github/workflows/x.yml (x.yml:3:3: unexpected key \"queue\" for \"concurrency\" section [syntax-check])","applicability":["maturity-1","maturity-2","maturity-3"],"steps-executed":1}`
 )
 
 func Test_LatestResultHasNoFailures(t *testing.T) {
@@ -268,23 +272,36 @@ func Test_LatestResultHasNoFailures(t *testing.T) {
 		logErr  error
 		want    gemara.Result
 		wantMsg string
+		scanner string // overrides the fixture's 0.33.0
 	}{
-		{"all passed", 2, logWith(passedL1), nil, gemara.Passed, "no failed controls at maturity level 2"},
-		{"level as string", "2", logWith(passedL1), nil, gemara.Passed, "maturity level 2"},
-		{"unknown needs review", 2, logWith(passedL1, unknownL1), nil, gemara.NeedsReview, "OSPS-AC-02.01"},
-		{"level-1 scan against level 2", 2, logWith(passedL1, skippedL2), nil, gemara.Failed, "publish a scan at maturity level 2"},
-		{"level-2 skip ignored at level 1", 1, logWith(passedL1, skippedL2), nil, gemara.Passed, "maturity level 1"},
-		{"maturity-1-only entry counts at level 2", 2, logWith(passedL1, failedL1), nil, gemara.Failed, "OSPS-VM-02.01"},
-		{"maturity-1-only entry counts at level 1", 1, logWith(passedL1, failedL1), nil, gemara.Failed, "OSPS-VM-02.01"},
-		{"maturity-1-only entry a level-2 scan skipped", 2, logWith(passedL1, skippedL1Only), nil, gemara.NeedsReview, "tags them only for lower levels, so the scan did not evaluate them; check them by hand: OSPS-BR-07.01"},
-		{"log unreadable", 2, nil, errors.New("boom"), gemara.NeedsReview, "boom"},
-		{"level missing", nil, logWith(passedL1), nil, gemara.NeedsReview, "maturity_level"},
-		{"level out of range", 4, logWith(passedL1), nil, gemara.NeedsReview, "maturity_level"},
+		{"all passed", 2, logWith(passedL1), nil, gemara.Passed, "no failed controls at maturity level 2", ""},
+		{"level as string", "2", logWith(passedL1), nil, gemara.Passed, "maturity level 2", ""},
+		{"unknown needs review", 2, logWith(passedL1, unknownL1), nil, gemara.NeedsReview, "OSPS-AC-02.01", ""},
+		{"level-1 scan against level 2", 2, logWith(passedL1, skippedL2), nil, gemara.Failed, "publish a scan at maturity level 2", ""},
+		{"level-2 skip ignored at level 1", 1, logWith(passedL1, skippedL2), nil, gemara.Passed, "maturity level 1", ""},
+		{"maturity-1-only entry counts at level 2", 2, logWith(passedL1, failedL1), nil, gemara.Failed, "OSPS-VM-02.01", ""},
+		{"maturity-1-only entry counts at level 1", 1, logWith(passedL1, failedL1), nil, gemara.Failed, "OSPS-VM-02.01", ""},
+		{"maturity-1-only entry a level-2 scan skipped", 2, logWith(passedL1, skippedL1Only), nil, gemara.NeedsReview, "tags them only for lower levels, so the scan did not evaluate them; check them by hand: OSPS-BR-07.01", "0.33.1"},
+		{"stale scanner skipped BR-07.01", 2, logWith(passedL1, skippedL1Only), nil, gemara.NeedsReview, "1 result(s) are stale scanner results, not project failures: scanner 0.33.0 predates the fixes in v0.33.1, so re-publish with v0.33.1 or later: OSPS-BR-07.01 Not Run", ""},
+		{"stale binary scan Unknown", 2, logWith(passedL1, staleBinaryScan), nil, gemara.NeedsReview, "stale scanner results, not project failures: scanner 0.33.0 predates the fixes in v0.33.1, so re-publish with v0.33.1 or later: OSPS-QA-05.01 Unknown", ""},
+		{"stale workflow parse error", 2, logWith(passedL1, staleWorkflowParse), nil, gemara.NeedsReview, "OSPS-BR-01.01 Needs Review", ""},
+		{"binary scan Unknown from a fixed scanner", 2, logWith(passedL1, staleBinaryScan), nil, gemara.NeedsReview, "re-scan or check them by hand: OSPS-QA-05.01", "0.33.1"},
+		{"unknown scanner version is not judged stale", 2, logWith(passedL1, staleBinaryScan), nil, gemara.NeedsReview, "scanner unknown) has no failed controls at maturity level 2, but the scanner could not determine", "-"},
+		{"log unreadable", 2, nil, errors.New("boom"), gemara.NeedsReview, "boom", ""},
+		{"level missing", nil, logWith(passedL1), nil, gemara.NeedsReview, "maturity_level", ""},
+		{"level out of range", 4, logWith(passedL1), nil, gemara.NeedsReview, "maturity_level", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := strimziHub(t)
 			h.log, h.logErr = tt.log, tt.logErr
+			switch tt.scanner {
+			case "":
+			case "-":
+				h.target.Versions[0].Latest.EvaluatorPlugin.Version = ""
+			default:
+				h.target.Versions[0].Latest.EvaluatorPlugin.Version = tt.scanner
+			}
 			h.install(t)
 			payload := strimziPayload(t)
 			payload.Config.Vars = map[string]any{"grc_store_target": strimziTarget}
@@ -353,7 +370,7 @@ func Test_AIReviewUncheckedControlEvidence(t *testing.T) {
 
 	result, message, confidence := AIReviewUncheckedControlEvidence(payload)
 
-	if result != gemara.Failed || confidence != gemara.High || message != "[AI-Assisted] The self assessment is still in progress. [AI input was incomplete: https://strimzi.io/documentation/: HTTP 404]" {
+	if result != gemara.Failed || confidence != gemara.High || message != "[AI-Assisted] The self assessment is still in progress. [AI input was incomplete: https://strimzi.io/documentation/: HTTP 404] Not covered by the AI review: 2 result(s) are stale scanner results, not project failures: scanner 0.33.0 predates the fixes in v0.33.1, so re-publish with v0.33.1 or later: OSPS-BR-07.01 Not Run, OSPS-VM-02.01 Not Run" {
 		t.Errorf("got %v %v %q", result, confidence, message)
 	}
 	golden := readFixture(t, "unchecked_control_evidence_prompt.golden", nil)
@@ -376,7 +393,8 @@ func Test_AIReviewUncheckedControlEvidence(t *testing.T) {
 		listed[control.ID] = true
 	}
 	// At level 2, maturity-1-only entries apply (levels are cumulative); maturity-3-only ones do not.
-	for id, want := range map[string]bool{"OSPS-BR-01.03": true, "OSPS-SA-03.01": true, "OSPS-BR-01.02": true, "OSPS-AC-04.02": false, "OSPS-VM-02.01": true, "OSPS-QA-03.01": false} {
+	// VM-02.01 is a stale scanner result from 0.33.0, so it is left out.
+	for id, want := range map[string]bool{"OSPS-BR-01.03": true, "OSPS-SA-03.01": true, "OSPS-BR-01.02": true, "OSPS-AC-04.02": false, "OSPS-VM-02.01": false, "OSPS-QA-03.01": false} {
 		if listed[id] != want {
 			t.Errorf("%s listed = %v, want %v", id, listed[id], want)
 		}

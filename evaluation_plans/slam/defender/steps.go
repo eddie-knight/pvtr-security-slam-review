@@ -14,6 +14,7 @@ import (
 	"github.com/eddie-knight/pvtr-security-slam-review/evaluation_plans/reusable_steps"
 	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/si-tooling/v2/si"
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -63,7 +64,7 @@ func ResultPublished(payload data.Payload) (result gemara.Result, message string
 	if !ok {
 		return gemara.Failed, fmt.Sprintf("grc.store target %s/%s has no published OSPS Baseline evaluation", namespace, id), gemara.High
 	}
-	return gemara.Passed, fmt.Sprintf("grc.store target %s/%s has a published OSPS Baseline evaluation (%s, run %s)", namespace, id, latest.LogVersion, latest.RunAt), gemara.High
+	return gemara.Passed, fmt.Sprintf("grc.store target %s/%s has a published OSPS Baseline evaluation (%s, run %s)", namespace, id, resultLabel(latest), latest.RunAt), gemara.High
 }
 
 // ResultIsRecurring requires more than one published run, the newest recent
@@ -152,12 +153,14 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 	if err != nil {
 		return gemara.NeedsReview, fmt.Sprintf("Could not read the latest published log for %s/%s: %s; manual review needed", namespace, id, err), gemara.Low
 	}
-	var failed, skipped, untagged, unknown []string
+	var failed, skipped, untagged, unknown, stale []string
 	for _, entry := range entries {
 		if !appliesAt(entry, level) {
 			continue
 		}
 		switch {
+		case staleFinding(latest, entry):
+			stale = append(stale, fmt.Sprintf("%s %s", entry.Requirement.EntryID, entry.Result))
 		case entry.Result == gemara.Failed.String():
 			failed = append(failed, entry.Requirement.EntryID)
 		case entry.Result == gemara.Unknown.String():
@@ -171,10 +174,10 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 		}
 	}
 	if len(failed) > 0 {
-		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports %d failed control(s) at maturity level %d: %s", namespace, id, latest.LogVersion, len(failed), level, strings.Join(failed, ", ")), gemara.High
+		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports %d failed control(s) at maturity level %d: %s", namespace, id, resultLabel(latest), len(failed), level, strings.Join(failed, ", ")), gemara.High
 	}
 	if len(skipped) > 0 {
-		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) did not evaluate %d control(s) that apply at maturity level %d (%s); publish a scan at maturity level %d", namespace, id, latest.LogVersion, len(skipped), level, strings.Join(skipped, ", "), level), gemara.High
+		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) did not evaluate %d control(s) that apply at maturity level %d (%s); publish a scan at maturity level %d", namespace, id, resultLabel(latest), len(skipped), level, strings.Join(skipped, ", "), level), gemara.High
 	}
 	var gaps []string
 	if len(untagged) > 0 {
@@ -183,10 +186,13 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 	if len(unknown) > 0 {
 		gaps = append(gaps, unknownNote(unknown))
 	}
-	if len(gaps) > 0 {
-		return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no failed controls at maturity level %d, but %s", namespace, id, latest.LogVersion, level, strings.Join(gaps, "; ")), gemara.Medium
+	if len(stale) > 0 {
+		gaps = append(gaps, staleNote(latest, stale))
 	}
-	return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports no failed controls at maturity level %d", namespace, id, latest.LogVersion, level), gemara.High
+	if len(gaps) > 0 {
+		return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no failed controls at maturity level %d, but %s", namespace, id, resultLabel(latest), level, strings.Join(gaps, "; ")), gemara.Medium
+	}
+	return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports no failed controls at maturity level %d", namespace, id, resultLabel(latest), level), gemara.High
 }
 
 // AIReviewUncheckedControlEvidence asks the model whether the documentation
@@ -212,8 +218,12 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 		return gemara.NeedsReview, fmt.Sprintf("Could not read the latest published log for %s/%s: %s; manual review needed", namespace, id, err), gemara.Low
 	}
 	var unchecked []uncheckedControl
-	var unknown []string
+	var unknown, stale []string
 	for _, entry := range entries {
+		if appliesAt(entry, level) && staleFinding(latest, entry) {
+			stale = append(stale, fmt.Sprintf("%s %s", entry.Requirement.EntryID, entry.Result))
+			continue
+		}
 		if appliesAt(entry, level) && entry.Result == gemara.Unknown.String() {
 			unknown = append(unknown, unknownControl(entry))
 		}
@@ -228,11 +238,18 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 			Recommendation: entry.Recommendation,
 		})
 	}
+	var notes []string
+	if len(unknown) > 0 {
+		notes = append(notes, unknownNote(unknown))
+	}
+	if len(stale) > 0 {
+		notes = append(notes, staleNote(latest, stale))
+	}
 	if len(unchecked) == 0 {
-		if len(unknown) > 0 {
-			return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d, but %s", namespace, id, latest.LogVersion, level, unknownNote(unknown)), gemara.Medium
+		if len(notes) > 0 {
+			return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d, but %s", namespace, id, resultLabel(latest), level, strings.Join(notes, "; ")), gemara.Medium
 		}
-		return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d", namespace, id, latest.LogVersion, level), gemara.High
+		return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d", namespace, id, resultLabel(latest), level), gemara.High
 	}
 
 	targetPage := fmt.Sprintf("https://grc.store/targets/%s/%s", namespace, id)
@@ -283,9 +300,10 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 		}
 	}
 	result, message, confidence = reusable_steps.AIReview(payload, "defender-unchecked-control-evidence", string(material), sources, incomplete)
-	// Only the last step's message reaches the log, so repeat the Unknowns here.
-	if len(unknown) > 0 {
-		message += " Not covered by the AI review: " + unknownNote(unknown)
+	// Only the last step's message reaches the log, so repeat the Unknowns and
+	// stale scanner results here.
+	if len(notes) > 0 {
+		message += " Not covered by the AI review: " + strings.Join(notes, "; ")
 		if result == gemara.Passed {
 			result, confidence = gemara.NeedsReview, gemara.Medium
 		}
@@ -295,6 +313,44 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 
 func unknownControl(entry assessmentLogEntry) string {
 	return fmt.Sprintf("%s (%s)", entry.Requirement.EntryID, entry.Message)
+}
+
+// fixedScannerVersion is the first OSPS Baseline scanner release with
+// ossf/pvtr-github-repo-scanner #519 (batched binary-scan fallback), #520
+// (unknown workflow keys) and #521 (BR-07.01 and VM-02.01 at every level).
+const fixedScannerVersion = "v0.33.1"
+
+// resultLabel names a published result and the scanner version that made it.
+func resultLabel(evaluation data.GrcStoreEvaluation) string {
+	version := evaluation.EvaluatorPlugin.Version
+	if version == "" {
+		version = "unknown"
+	}
+	return fmt.Sprintf("%s, scanner %s", evaluation.LogVersion, version)
+}
+
+// staleFinding reports whether the entry is one of the scanner bugs fixed in
+// fixedScannerVersion, in a result an older scanner made: the finding says
+// nothing about the project. An unknown scanner version is not judged stale.
+func staleFinding(evaluation data.GrcStoreEvaluation, entry assessmentLogEntry) bool {
+	version := "v" + strings.TrimPrefix(evaluation.EvaluatorPlugin.Version, "v")
+	if !semver.IsValid(version) || semver.Compare(version, fixedScannerVersion) >= 0 {
+		return false
+	}
+	switch id := entry.Requirement.EntryID; {
+	case id == "OSPS-QA-05.01" || id == "OSPS-QA-05.02":
+		return entry.Result == gemara.Unknown.String()
+	case id == "OSPS-BR-01.01":
+		return entry.Result == gemara.NeedsReview.String() && strings.Contains(entry.Message, "unexpected key")
+	case id == "OSPS-BR-07.01" || id == "OSPS-VM-02.01":
+		return entry.Result == gemara.NotRun.String() && entry.StepsExecuted == 0
+	}
+	return false
+}
+
+// staleNote marks stale scanner results as such, not as project failures.
+func staleNote(evaluation data.GrcStoreEvaluation, stale []string) string {
+	return fmt.Sprintf("%d result(s) are stale scanner results, not project failures: scanner %s predates the fixes in %s, so re-publish with %s or later: %s", len(stale), evaluation.EvaluatorPlugin.Version, fixedScannerVersion, fixedScannerVersion, strings.Join(stale, ", "))
 }
 
 // unknownNote says which controls the scanner could not determine and what to do.

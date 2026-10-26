@@ -147,7 +147,10 @@ type GrcStoreEvaluation struct {
 	CatalogID         string `json:"catalog_id"`
 	EvaluatorID       string `json:"evaluator_id"`
 	EvaluatorName     string `json:"evaluator_name"`
-	Signer            struct {
+	EvaluatorPlugin   struct {
+		Version string `json:"version"`
+	} `json:"evaluator_plugin"`
+	Signer struct {
 		WorkflowRef      string `json:"workflow_ref"`
 		WorkflowDigest   string `json:"workflow_digest"`
 		CallerRepository string `json:"caller_repository"`

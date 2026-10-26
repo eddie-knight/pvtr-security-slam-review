@@ -8,10 +8,11 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/go-github/v74 v74.0.0
 	github.com/hashicorp/go-hclog v1.6.3
-	github.com/ossf/pvtr-github-repo-scanner v0.32.3
+	github.com/ossf/pvtr-github-repo-scanner v0.33.1
 	github.com/ossf/si-tooling/v2 v2.3.0
 	github.com/privateerproj/privateer-sdk v1.34.1
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/mod v0.41.0
 	golang.org/x/oauth2 v0.37.0
 )
 
@@ -38,7 +39,7 @@ require (
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/gemaraproj/grc-store-clientkit v0.2.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
@@ -142,7 +143,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.3 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect

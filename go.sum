@@ -134,8 +134,8 @@ github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHk
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=
-github.com/gabriel-vasile/mimetype v1.4.15 h1:05iP/CYtZ/w455R/KZM6rZ5ieAdh99UPtd+d3YzLmaI=
-github.com/gabriel-vasile/mimetype v1.4.15/go.mod h1:azpTcoLcDZRNgFou5j+APrqQx9HqVPWa6ijYQIIVswQ=
+github.com/gabriel-vasile/mimetype v1.4.16 h1:5izNFuvA37st1dDRAcA7TtmngBmRgiIPDmTtiEvjx1E=
+github.com/gabriel-vasile/mimetype v1.4.16/go.mod h1:3oFFwxX8kTklZwzIl2aQEDZT0lKY8xH92ST88bAwba4=
 github.com/gemaraproj/go-gemara v0.11.0 h1:yqCIFJg2HeKfBfQGqho9NNvNHxftUIEHQo51t5QSdvo=
 github.com/gemaraproj/go-gemara v0.11.0/go.mod h1:f2Z92OdIEsxvt6LYud/qxJ0gSRGsZUD6pv+epM2Iytw=
 github.com/gemaraproj/grc-store-clientkit v0.2.0 h1:m2KYdg9/YoQP1+z9jbHIgEgQi2DnWGpFBC/FWVhcwNc=
@@ -353,8 +353,8 @@ github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8
 github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJwooC2xJA040=
 github.com/opencontainers/image-spec v1.1.1/go.mod h1:qpqAh3Dmcf36wStyyWU+kCeDgrGnAve2nCC8+7h8Q0M=
-github.com/ossf/pvtr-github-repo-scanner v0.32.3 h1:QzOKXNhfuVURwVbvp5SBD1SpREtyKlDb7SIBky6uKI4=
-github.com/ossf/pvtr-github-repo-scanner v0.32.3/go.mod h1:U5F1auAYv83wDSPCdM9+FCNd0WZ8/OsQ58OybRPnNq8=
+github.com/ossf/pvtr-github-repo-scanner v0.33.1 h1:esUxjZ5McqUZxMAUKzdSxQBDL5tQ4ccmplAlGsmjXR8=
+github.com/ossf/pvtr-github-repo-scanner v0.33.1/go.mod h1:3IGBNjVhqQVT/6DIQnPCN6k+OJkf91mhJWyEGVlWmto=
 github.com/ossf/si-tooling/v2 v2.3.0 h1:TKUkKiWvmwaznbKKQWw//zOwECrxxcHbCsH1zB08iXs=
 github.com/ossf/si-tooling/v2 v2.3.0/go.mod h1:I7UDEAfNwoT2iwZrvORukgkGLKeD/cgVhHtcLPpaS6c=
 github.com/pborman/getopt v0.0.0-20170112200414-7148bc3a4c30/go.mod h1:85jBQOZwpVEaDAr341tbn15RS4fCAsIst0qp7i8ex1o=
