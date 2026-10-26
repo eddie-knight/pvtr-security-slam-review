@@ -37,7 +37,7 @@ type docLink struct {
 //	SI field                                         | documents                          | OSPS controls
 //	project.documentation.quickstart-guide           | user guide for basic functionality | DO-01.01 (L1)
 //	project.documentation.detailed-guide             | user guide for basic functionality | DO-01.01 (L1)
-//	repository.documentation.contributing-guide      | contribution process, defects      | GV-03.01, DO-02.01 (L1), GV-03.02 (L2)
+//	repository.documentation.contributing-guide      | contribution process               | GV-03.01 (L1), GV-03.02 (L2)
 //	project.vulnerability-reporting.policy           | security policy and contacts       | VM-02.01 (L1), VM-01.01, VM-03.01, VM-04.01 (L2)
 //	repository.documentation.security-policy         | security policy and contacts       | VM-02.01 (L1), VM-01.01, VM-03.01, VM-04.01 (L2)
 //	repository.documentation.governance              | members, roles, responsibilities   | GV-01.01, GV-01.02 (L2)
@@ -61,7 +61,7 @@ func docFields(insights si.SecurityInsights) []docLink {
 	}{
 		{docLink{Field: "project.documentation.quickstart-guide", Topic: "user guide for basic functionality", Controls: "OSPS-DO-01.01"}, project.QuickstartGuide},
 		{docLink{Field: "project.documentation.detailed-guide", Topic: "user guide for basic functionality", Controls: "OSPS-DO-01.01"}, project.DetailedGuide},
-		{docLink{Field: "repository.documentation.contributing-guide", Topic: "contribution process and requirements, including how to report defects", Controls: "OSPS-GV-03.01, OSPS-GV-03.02, OSPS-DO-02.01"}, repo.ContributingGuide},
+		{docLink{Field: "repository.documentation.contributing-guide", Topic: "contribution process and requirements", Controls: "OSPS-GV-03.01, OSPS-GV-03.02"}, repo.ContributingGuide},
 		{docLink{Field: "project.vulnerability-reporting.policy", Topic: security, Controls: "OSPS-VM-01.01, OSPS-VM-02.01, OSPS-VM-03.01, OSPS-VM-04.01"}, vuln.Policy},
 		{docLink{Field: deprecatedSecurityPolicy, Topic: security, Controls: "OSPS-VM-01.01, OSPS-VM-02.01, OSPS-VM-03.01, OSPS-VM-04.01"}, vuln.SecurityPolicy},
 		{docLink{Field: "repository.documentation.security-policy", Topic: security, Controls: "OSPS-VM-01.01, OSPS-VM-02.01, OSPS-VM-03.01, OSPS-VM-04.01"}, repo.SecurityPolicy},
@@ -100,9 +100,8 @@ func declaredDocs(insights si.SecurityInsights) []docLink {
 const deprecatedSecurityPolicy = "project.vulnerability-reporting.security-policy"
 
 // level1Docs are the Maturity Level 1 documentation controls with a Security
-// Insights home: DO-01.01 (user guide), GV-03.01 and by convention DO-02.01
-// (contributing guide; SI has no defect-reporting field), and VM-02.01
-// (security policy). Any one field of a group satisfies it.
+// Insights home: DO-01.01 (user guide), GV-03.01 (contributing guide), and
+// VM-02.01 (security policy). Any one field of a group satisfies it.
 var level1Docs = []struct {
 	name   string
 	fields []string
