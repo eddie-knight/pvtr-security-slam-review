@@ -29,8 +29,10 @@ controls:
           maturity level and link each document from Security Insights.
         state: Active
         text: |
-          Every documentation link in Security Insights MUST resolve to a real
-          document that covers the topic it is declared for.
+          The OSPS Baseline documentation controls at the project's maturity
+          level MUST pass, and every documentation link in Security Insights
+          MUST resolve to a real document that covers the topic it is declared
+          for.
     group: CH
     id: SLAM-CH-01
     objective: |

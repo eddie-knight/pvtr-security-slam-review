@@ -25,6 +25,7 @@ var (
 			reusable_steps.HasSecurityInsightsFile,
 			chronicler.DocumentationLinksPresent,
 			chronicler.DocumentationLinksResolve,
+			chronicler.BaselineDocumentationControlsMet,
 			chronicler.AIReviewDocumentation,
 		},
 		"SLAM-ME-01.01": {

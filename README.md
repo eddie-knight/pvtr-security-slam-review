@@ -11,7 +11,7 @@ quality, which only happens when the fixed checks did not fail.
 | Badge | Requirement | Deterministic | AI review |
 |---|---|---|---|
 | Cleaner | SLAM-CL-01.01 | lowercase `security-insights.yml` at the root; si-tooling strict load; spec-required fields present | none |
-| Chronicler | SLAM-CH-01.01 | Level 1 documentation links declared; every link resolves | each doc is real and covers its topic |
+| Chronicler | SLAM-CH-01.01 | Level 1 documentation links declared; every link resolves; the OSPS Baseline scanner's DO control steps pass at `maturity_level` | each doc is real and covers its topic |
 | Mechanizer | SLAM-ME-01.01 | scanner listed under tools (flags a single ad hoc run); scanner workflow on schedule/push/release; no `pull_request_target` | none |
 | Inspector | SLAM-IN-01.01 | `assessments.self.evidence` declared and resolves | coverage and project-specificity |
 | Defender | SLAM-DE-01.01 | grc.store target declared; result published, recurring, from a trusted publisher | none |
@@ -29,4 +29,4 @@ make build
 
 See [example-config.yml](example-config.yml). Pick badges with `policy.applicability`. Without
 `ai_provider`, `ai_model`, and `ai_api_key`, the AI steps return Needs Review, as do low-confidence AI verdicts.
-Defender needs `maturity_level` (1-3), set by whoever runs the review; the project does not choose it.
+Chronicler and Defender need `maturity_level` (1-3), set by whoever runs the review; the project does not choose it.

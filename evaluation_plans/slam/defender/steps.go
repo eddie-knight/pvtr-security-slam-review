@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -131,9 +130,9 @@ func TrustedPublisher(payload data.Payload) (result gemara.Result, message strin
 // OSPS Baseline result that applies at the project's maturity level to have
 // been evaluated without a failure.
 func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	level, ok := maturityLevel(payload)
+	level, ok := reusable_steps.MaturityLevel(payload)
 	if !ok {
-		return gemara.NeedsReview, maturityLevelMissing, gemara.Low
+		return gemara.NeedsReview, reusable_steps.MaturityLevelMissing, gemara.Low
 	}
 	target, namespace, id, result, message := loadTarget(payload)
 	if target == nil {
@@ -173,9 +172,9 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 // level that the latest published result could not check (Needs Review and
 // Not Run).
 func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	level, ok := maturityLevel(payload)
+	level, ok := reusable_steps.MaturityLevel(payload)
 	if !ok {
-		return gemara.NeedsReview, maturityLevelMissing, gemara.Low
+		return gemara.NeedsReview, reusable_steps.MaturityLevelMissing, gemara.Low
 	}
 	target, namespace, id, result, message := loadTarget(payload)
 	if target == nil {
@@ -321,26 +320,6 @@ func loadLog(payload data.Payload, evaluation data.GrcStoreEvaluation) ([]assess
 		entries = append(entries, evaluation.AssessmentLogs...)
 	}
 	return entries, nil
-}
-
-const maturityLevelMissing = "Set the maturity_level var (1-3) to the project's OSPS Baseline maturity level"
-
-// maturityLevel reads the maturity_level var as an int or a numeric string.
-func maturityLevel(payload data.Payload) (int, bool) {
-	if payload.Config == nil {
-		return 0, false
-	}
-	value, _ := payload.Config.GetVar("maturity_level")
-	var level int
-	switch v := value.(type) {
-	case int:
-		level = v
-	case float64:
-		level = int(v)
-	case string:
-		level, _ = strconv.Atoi(strings.TrimSpace(v))
-	}
-	return level, level >= 1 && level <= 3
 }
 
 // appliesAt reports whether a log entry belongs to the level. The catalog

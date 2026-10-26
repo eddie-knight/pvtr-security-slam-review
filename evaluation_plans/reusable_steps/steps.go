@@ -3,6 +3,7 @@ package reusable_steps
 import (
 	"fmt"
 	"maps"
+	"strconv"
 	"strings"
 
 	"github.com/eddie-knight/pvtr-security-slam-review/data"
@@ -114,4 +115,25 @@ func ValidateAIResponse(response sdkai.Response) error {
 		return fmt.Errorf("AI response explanation is required")
 	}
 	return nil
+}
+
+// MaturityLevelMissing is the message for steps that need maturity_level.
+const MaturityLevelMissing = "Set the maturity_level var (1-3) to the project's OSPS Baseline maturity level"
+
+// MaturityLevel reads the maturity_level var as an int or a numeric string.
+func MaturityLevel(payload data.Payload) (int, bool) {
+	if payload.Config == nil {
+		return 0, false
+	}
+	value, _ := payload.Config.GetVar("maturity_level")
+	var level int
+	switch v := value.(type) {
+	case int:
+		level = v
+	case float64:
+		level = int(v)
+	case string:
+		level, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	return level, level >= 1 && level <= 3
 }
