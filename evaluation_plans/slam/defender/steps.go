@@ -245,7 +245,13 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 	if err != nil {
 		return gemara.NeedsReview, "Could not assemble evidence for AI review: " + err.Error(), gemara.Low
 	}
-	return reusable_steps.AIReview(payload, "defender-unchecked-control-evidence", string(material), sources)
+	incomplete := packet.Collection.Unretrieved
+	for _, document := range packet.Documentation {
+		if document.Truncated {
+			incomplete = append(incomplete, document.URL+" truncated")
+		}
+	}
+	return reusable_steps.AIReview(payload, "defender-unchecked-control-evidence", string(material), sources, incomplete)
 }
 
 const evidenceCollectionScope = "The unchecked controls are every Needs Review and Not Run entry in the latest evaluation log published to grc.store whose applicability includes the project's maturity level, which the reviewer supplied as maturity_level. Documentation is the documentation, vulnerability policy and assessment evidence URLs declared in Security Insights, each fetched once with HTML reduced to text and content capped; links inside those documents were not followed. Complete means every declared URL was retrieved, not that the project's documentation is exhaustive."

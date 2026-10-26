@@ -201,13 +201,13 @@ type documentationMaterial struct {
 const collectionScope = "Each documentation URL declared in the Security Insights file, fetched once without credentials (github.com blob URLs as raw file content). HTML is reduced to text. No links within the documents were followed and no other repository files were read. Each document's content is capped at 16384 characters and all content together at 131072 characters; content_truncated marks a document cut at its cap, and not_included marks one left out at the total cap. A section names the URL fragment the declaration points at; the content is the whole document, except that a document over its cap starts at the Markdown heading matching the section when one is found (content_starts_at_section)."
 
 func AIReviewDocumentation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	material, sources := documentationEvidence(payload)
-	return reusable_steps.AIReview(payload, "chronicler-documentation-quality", material, sources)
+	material, sources, incomplete := documentationEvidence(payload)
+	return reusable_steps.AIReview(payload, "chronicler-documentation-quality", material, sources, incomplete)
 }
 
 // documentationEvidence groups declarations by URL, so a document declared for
 // several fields is sent once with every topic it must cover.
-func documentationEvidence(payload data.Payload) (string, []string) {
+func documentationEvidence(payload data.Payload) (string, []string, []string) {
 	packet := documentationMaterial{Collection: collection{Scope: collectionScope}}
 	index := map[string]int{}
 	var sources []string
@@ -264,7 +264,13 @@ func documentationEvidence(payload data.Payload) (string, []string) {
 		total += len(text)
 	}
 	material, _ := json.Marshal(packet) // only strings and bools: cannot fail
-	return string(material), sources
+	incomplete := packet.Collection.NotRetrieved
+	for _, doc := range packet.Documents {
+		if doc.Truncated {
+			incomplete = append(incomplete, doc.SourceURL+" truncated")
+		}
+	}
+	return string(material), sources, incomplete
 }
 
 var markdownHeading = regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.+?)[ \t#]*$`)

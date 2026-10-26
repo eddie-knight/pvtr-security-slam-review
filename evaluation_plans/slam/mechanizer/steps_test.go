@@ -111,37 +111,42 @@ func wf(path, content string) data.WorkflowFile {
 	return data.WorkflowFile{Path: path, Content: []byte(content)}
 }
 
-const actionJob = `
+const (
+	sha       = "0123456789abcdef0123456789abcdef01234567"
+	actionJob = `
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: revanite-io/osps-baseline-action@v1
+      - uses: actions/checkout@` + sha + `
+      - name: Scan
+        uses: revanite-io/osps-baseline-action@` + sha + `
 `
+)
 
-func Test_ScannerWorkflows(t *testing.T) {
+func Test_ScannerWorkflowRequirements(t *testing.T) {
 	strimzi, err := os.ReadFile("testdata/strimzi-osps-baseline.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	unrelated := wf(".github/workflows/ci.yml", "on: push\njobs:\n  b:\n    steps:\n      - run: make\n")
+	adhoc := payloadWithTools(si.SecurityTool{Name: "Privateer", Results: si.SecurityToolResults{
+		Adhoc: &si.Attestation{Location: "https://github.com/o/r/actions/runs/1"},
+	}})
 	tests := []struct {
-		name          string
-		files         []data.WorkflowFile
-		err           error
-		wantRecurring gemara.Result
-		wantRecMsg    string
-		wantPRT       gemara.Result
-		wantPRTMsg    string
+		name       string
+		payload    data.Payload
+		files      []data.WorkflowFile
+		err        error
+		remote     map[string]string
+		wantResult gemara.Result
+		wantMsg    string
 	}{
 		{
-			name:          "strimzi reusable workflow caller",
-			files:         []data.WorkflowFile{unrelated, wf(".github/workflows/osps-baseline.yml", string(strimzi))},
-			wantRecurring: gemara.Passed,
-			wantRecMsg:    "OSPS Baseline scanner workflow .github/workflows/osps-baseline.yml runs on push",
-			wantPRT:       gemara.Passed,
-			wantPRTMsg:    "OSPS Baseline scanner workflows do not trigger on pull_request_target: .github/workflows/osps-baseline.yml",
+			name:       "strimzi calls pvtr-publish-results by tag, which is exempt from pinning",
+			files:      []data.WorkflowFile{unrelated, wf(".github/workflows/osps-baseline.yml", string(strimzi))},
+			wantResult: gemara.Passed,
+			wantMsg:    "Scanner runs in .github/workflows/osps-baseline.yml (job results uses revanite-io/pvtr-publish-results/.github/workflows/publish.yml@v1). PASS recurring trigger: .github/workflows/osps-baseline.yml on push, schedule. PASS actions pinned to full commit SHAs. PASS no pull_request_target",
 		},
 		{
 			name: "scheduled caller of a local workflow_call scanner workflow",
@@ -149,89 +154,87 @@ func Test_ScannerWorkflows(t *testing.T) {
 				wf(".github/workflows/ci.yml", "on:\n  schedule:\n    - cron: '0 0 * * 0'\njobs:\n  baseline:\n    uses: ./.github/workflows/baseline.yml\n"),
 				wf(".github/workflows/baseline.yml", "on: workflow_call"+actionJob),
 			},
-			wantRecurring: gemara.Passed,
-			wantRecMsg:    "OSPS Baseline scanner workflow .github/workflows/ci.yml runs on schedule",
-			wantPRT:       gemara.Passed,
-			wantPRTMsg:    "OSPS Baseline scanner workflows do not trigger on pull_request_target: .github/workflows/ci.yml",
+			wantResult: gemara.Passed,
+			wantMsg:    "Scanner runs in .github/workflows/ci.yml (job baseline calls .github/workflows/baseline.yml, where job scan step Scan uses revanite-io/osps-baseline-action@" + sha + "). PASS recurring trigger: .github/workflows/ci.yml on schedule. PASS actions pinned to full commit SHAs. PASS no pull_request_target",
 		},
 		{
-			name: "pull_request_target caller of a local scanner workflow",
+			name: "every requirement failing is reported, including the called workflow's tags",
 			files: []data.WorkflowFile{
-				wf("caller.yml", "on: [push, pull_request_target]\njobs:\n  b:\n    uses: ./called.yml\n"),
-				wf("called.yml", "on: workflow_call"+actionJob),
+				wf("caller.yml", "on: [pull_request_target, workflow_dispatch]\njobs:\n  b:\n    uses: ./called.yml\n"),
+				wf("called.yml", "on: workflow_call\njobs:\n  s:\n    steps:\n      - uses: actions/checkout@v5\n      - uses: revanite-io/osps-baseline-action@v1\n"),
 			},
-			wantRecurring: gemara.Passed,
-			wantRecMsg:    "OSPS Baseline scanner workflow caller.yml runs on push",
-			wantPRT:       gemara.Failed,
-			wantPRTMsg:    "OSPS Baseline scanner workflow triggers on pull_request_target: caller.yml",
+			wantResult: gemara.Failed,
+			wantMsg:    "Scanner runs in caller.yml (job b calls called.yml, where job s step #2 uses revanite-io/osps-baseline-action@v1). FAIL recurring trigger: no schedule, push, or release in caller.yml (pull_request_target, workflow_dispatch). FAIL actions pinned to full commit SHAs: caller.yml: called.yml: actions/checkout@v5; caller.yml: called.yml: revanite-io/osps-baseline-action@v1. FAIL no pull_request_target: caller.yml",
 		},
 		{
-			name:          "workflow_call only with no caller",
-			files:         []data.WorkflowFile{wf("a.yml", "on: workflow_call"+actionJob)},
-			wantRecurring: gemara.Failed,
-			wantRecMsg:    "OSPS Baseline scanner workflow does not run on a schedule, push, or release: a.yml (workflow_call)",
-			wantPRT:       gemara.Passed,
-			wantPRTMsg:    "OSPS Baseline scanner workflows do not trigger on pull_request_target: a.yml",
+			name:       "ACC: scanner container image in a run step, digest-pinned",
+			files:      []data.WorkflowFile{wf("a.yml", "on:\n  schedule:\n    - cron: '0 0 * * 1'\njobs:\n  baseline:\n    steps:\n      - name: Evaluate\n        run: docker run ghcr.io/ossf/pvtr-github-repo-scanner:v0.31.0@sha256:cd5e\n")},
+			wantResult: gemara.Passed,
+			wantMsg:    "Scanner runs in a.yml (job baseline step Evaluate runs the scanner). PASS recurring trigger: a.yml on schedule. PASS actions pinned to full commit SHAs. PASS no pull_request_target",
 		},
 		{
-			name:          "no scanner workflow",
-			files:         []data.WorkflowFile{unrelated},
-			wantRecurring: gemara.Failed,
-			wantRecMsg:    "No workflow on the default branch runs the OSPS Baseline scanner (osps-baseline-action or pvtr-publish-results)",
-			wantPRT:       gemara.Failed,
-			wantPRTMsg:    "No workflow on the default branch runs the OSPS Baseline scanner (osps-baseline-action or pvtr-publish-results)",
+			name:       "pvtr CLI and an unpinned docker action",
+			files:      []data.WorkflowFile{wf("a.yml", "on: release\njobs:\n  s:\n    steps:\n      - uses: docker://alpine:3\n      - run: pvtr run -c config.yml\n")},
+			wantResult: gemara.Failed,
+			wantMsg:    "Scanner runs in a.yml (job s step #2 runs the scanner). PASS recurring trigger: a.yml on release. FAIL actions pinned to full commit SHAs: a.yml: docker://alpine:3. PASS no pull_request_target",
 		},
 		{
-			name:          "string trigger release",
-			files:         []data.WorkflowFile{wf("a.yml", "on: release"+actionJob)},
-			wantRecurring: gemara.Passed,
-			wantRecMsg:    "OSPS Baseline scanner workflow a.yml runs on release",
-			wantPRT:       gemara.Passed,
-			wantPRTMsg:    "OSPS Baseline scanner workflows do not trigger on pull_request_target: a.yml",
+			name:       "remote reusable workflow that runs the scanner",
+			files:      []data.WorkflowFile{wf("a.yml", "on: push\njobs:\n  scan:\n    uses: org/shared/.github/workflows/baseline.yml@"+sha+"\n")},
+			remote:     map[string]string{"https://github.com/org/shared/blob/" + sha + "/.github/workflows/baseline.yml": "on: workflow_call\njobs:\n  s:\n    steps:\n      - run: privateer run\n"},
+			wantResult: gemara.Passed,
+			wantMsg:    "Scanner runs in a.yml (job scan calls org/shared/.github/workflows/baseline.yml@" + sha + ", where job s step #1 runs the scanner). PASS recurring trigger: a.yml on push. PASS actions pinned to full commit SHAs. PASS no pull_request_target",
 		},
 		{
-			name:          "list trigger, dispatch and pull_request only",
-			files:         []data.WorkflowFile{wf("a.yml", "on: [workflow_dispatch, pull_request]"+actionJob)},
-			wantRecurring: gemara.Failed,
-			wantRecMsg:    "OSPS Baseline scanner workflow does not run on a schedule, push, or release: a.yml (pull_request, workflow_dispatch)",
-			wantPRT:       gemara.Passed,
-			wantPRTMsg:    "OSPS Baseline scanner workflows do not trigger on pull_request_target: a.yml",
+			name:       "ad hoc results location warns even when the workflow passes",
+			payload:    adhoc,
+			files:      []data.WorkflowFile{wf("a.yml", "on: push"+actionJob)},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Scanner runs in a.yml (job scan step Scan uses revanite-io/osps-baseline-action@" + sha + "). PASS recurring trigger: a.yml on push. PASS actions pinned to full commit SHAs. PASS no pull_request_target. WARN Security Insights lists a single ad hoc run as the scanner's results location instead of the recurring workflow: Privateer (adhoc result https://github.com/o/r/actions/runs/1)",
 		},
 		{
-			name:          "map trigger with pull_request_target and privateer run step",
-			files:         []data.WorkflowFile{wf("a.yml", "on:\n  schedule:\n    - cron: '0 0 * * 0'\n  pull_request_target:\njobs:\n  s:\n    steps:\n      - run: privateer run -c config.yml\n")},
-			wantRecurring: gemara.Passed,
-			wantRecMsg:    "OSPS Baseline scanner workflow a.yml runs on schedule",
-			wantPRT:       gemara.Failed,
-			wantPRTMsg:    "OSPS Baseline scanner workflow triggers on pull_request_target: a.yml",
+			name: "ACC: ad hoc run listed beside the recurring workflow warns but passes",
+			payload: payloadWithTools(si.SecurityTool{Name: "OSPS Baseline Scanner (Privateer)", Results: si.SecurityToolResults{
+				Adhoc: &si.Attestation{Location: "https://github.com/o/r/actions/runs/38016769353"},
+				CI:    &si.Attestation{Location: "https://github.com/o/r/actions/workflows/osps-baseline.yml"},
+			}}),
+			files:      []data.WorkflowFile{wf("a.yml", "on: push"+actionJob)},
+			wantResult: gemara.Passed,
+			wantMsg:    "Scanner runs in a.yml (job scan step Scan uses revanite-io/osps-baseline-action@" + sha + "). PASS recurring trigger: a.yml on push. PASS actions pinned to full commit SHAs. PASS no pull_request_target. WARN Security Insights also lists a single one-off run as a scanner results location: OSPS Baseline Scanner (Privateer) (https://github.com/o/r/actions/runs/38016769353)",
 		},
 		{
-			name:          "unparseable workflow and no scanner",
-			files:         []data.WorkflowFile{wf("bad.yml", "on: [push\njobs: {")},
-			wantRecurring: gemara.NeedsReview,
-			wantRecMsg:    "No OSPS Baseline scanner workflow found, but these workflows could not be parsed: bad.yml",
-			wantPRT:       gemara.NeedsReview,
-			wantPRTMsg:    "No OSPS Baseline scanner workflow found, but these workflows could not be parsed: bad.yml",
+			name:       "no scanner workflow",
+			files:      []data.WorkflowFile{unrelated},
+			wantResult: gemara.Failed,
+			wantMsg:    "No workflow on the default branch runs the OSPS Baseline scanner (osps-baseline-action, pvtr-publish-results, the pvtr-github-repo-scanner action or image, or the privateer/pvtr CLI)",
 		},
 		{
-			name:          "workflows unreadable",
-			err:           errors.New("boom"),
-			wantRecurring: gemara.NeedsReview,
-			wantRecMsg:    "Could not read workflows on the default branch: boom",
-			wantPRT:       gemara.NeedsReview,
-			wantPRTMsg:    "Could not read workflows on the default branch: boom",
+			name:       "unparseable workflow and no scanner",
+			files:      []data.WorkflowFile{wf("bad.yml", "on: [push\njobs: {")},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "No OSPS Baseline scanner workflow found, but these workflows could not be parsed: bad.yml",
+		},
+		{
+			name:       "workflows unreadable",
+			err:        errors.New("boom"),
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Could not read workflows on the default branch: boom",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stubWorkflows(t, tt.files, tt.err)
-			result, msg, _ := ScannerWorkflowRecurring(data.Payload{})
-			if result != tt.wantRecurring || msg != tt.wantRecMsg {
-				t.Errorf("recurring: got (%v, %q), want (%v, %q)", result, msg, tt.wantRecurring, tt.wantRecMsg)
+			orig := fetchURL
+			fetchURL = func(_ *data.Payload, u string) (data.FetchedURL, error) {
+				if body, ok := tt.remote[u]; ok {
+					return data.FetchedURL{StatusCode: 200, Body: []byte(body)}, nil
+				}
+				return data.FetchedURL{StatusCode: 404}, nil
 			}
-			result, msg, _ = ScannerWorkflowAvoidsPullRequestTarget(data.Payload{})
-			if result != tt.wantPRT || msg != tt.wantPRTMsg {
-				t.Errorf("pull_request_target: got (%v, %q), want (%v, %q)", result, msg, tt.wantPRT, tt.wantPRTMsg)
+			t.Cleanup(func() { fetchURL = orig })
+			result, msg, _ := ScannerWorkflowRequirements(tt.payload)
+			if result != tt.wantResult || msg != tt.wantMsg {
+				t.Errorf("got (%v, %q)\nwant (%v, %q)", result, msg, tt.wantResult, tt.wantMsg)
 			}
 		})
 	}

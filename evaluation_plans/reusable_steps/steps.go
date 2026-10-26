@@ -3,7 +3,6 @@ package reusable_steps
 import (
 	"fmt"
 	"maps"
-	"strconv"
 	"strings"
 
 	"github.com/eddie-knight/pvtr-security-slam-review/data"
@@ -54,8 +53,10 @@ func HasSecurityInsightsFile(payload data.Payload) (result gemara.Result, messag
 // model's verdict as evidence. It is always the last step of a badge, so it
 // only runs once the deterministic steps found the evidence. With no AI
 // provider configured it returns NeedsReview: the evidence exists, but nobody
-// has judged its quality. sources name what the material was built from.
-func AIReview(payload data.Payload, behavior string, material string, sources []string) (gemara.Result, string, gemara.ConfidenceLevel) {
+// has judged its quality. sources name what the material was built from;
+// incomplete names what was cut or not retrieved from it, so a verdict on
+// partial input is never silent.
+func AIReview(payload data.Payload, behavior string, material string, sources []string, incomplete []string) (gemara.Result, string, gemara.ConfidenceLevel) {
 	if payload.Config == nil {
 		return gemara.NeedsReview, "AI review skipped: no plugin configuration; manual review needed", gemara.Low
 	}
@@ -77,11 +78,21 @@ func AIReview(payload data.Payload, behavior string, material string, sources []
 		evidence.Description = "AI Assisted Review of " + strings.Join(sources, ", ")
 	}
 	payload.AddEvidence(evidence)
+	// The full explanation, not response.Summary(): the SDK cuts the model's
+	// one-line message at 160 characters.
+	message := "[AI-Assisted] " + response.Explanation
+	if len(incomplete) > 0 {
+		note := "AI input was incomplete: " + strings.Join(incomplete, "; ")
+		if payload.Config != nil && payload.Config.Logger != nil {
+			payload.Config.Logger.Warn(behavior + ": " + note)
+		}
+		message += " [" + note + "]"
+	}
 	// A low-confidence verdict means the model lacked evidence; it must not award or deny a badge.
 	if response.GemaraResult() == gemara.NeedsReview || response.GemaraConfidence() == gemara.Low {
-		return gemara.NeedsReview, response.Summary(), gemara.Low
+		return gemara.NeedsReview, message, gemara.Low
 	}
-	return response.GemaraResult(), response.Summary(), response.GemaraConfidence()
+	return response.GemaraResult(), message, response.GemaraConfidence()
 }
 
 // AIFallback logs why an AI-assisted assessment was abandoned and returns
@@ -120,20 +131,8 @@ func ValidateAIResponse(response sdkai.Response) error {
 // MaturityLevelMissing is the message for steps that need maturity_level.
 const MaturityLevelMissing = "Set the maturity_level var (1-3) to the project's OSPS Baseline maturity level"
 
-// MaturityLevel reads the maturity_level var as an int or a numeric string.
+// MaturityLevel reads the maturity_level var; the Loader already rejected a
+// missing or out-of-range level for the badges that use it.
 func MaturityLevel(payload data.Payload) (int, bool) {
-	if payload.Config == nil {
-		return 0, false
-	}
-	value, _ := payload.Config.GetVar("maturity_level")
-	var level int
-	switch v := value.(type) {
-	case int:
-		level = v
-	case float64:
-		level = int(v)
-	case string:
-		level, _ = strconv.Atoi(strings.TrimSpace(v))
-	}
-	return level, level >= 1 && level <= 3
+	return data.MaturityLevel(payload.Config)
 }

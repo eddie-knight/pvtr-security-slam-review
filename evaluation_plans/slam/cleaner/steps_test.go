@@ -67,6 +67,8 @@ func Test_FileNamedSecurityInsightsYml(t *testing.T) {
 		{"uppercase", []string{"SECURITY-INSIGHTS.yml"}, gemara.Failed, "Security Insights file is named SECURITY-INSIGHTS.yml; the badge requires the lowercase name security-insights.yml"},
 		{"yaml extension", []string{"security-insights.yaml"}, gemara.Failed, "Security Insights file is named security-insights.yaml; the badge requires the lowercase name security-insights.yml"},
 		{"missing", []string{"README.md"}, gemara.Failed, "No security-insights.yml found at the repository root"},
+		// SOaC
+		{"both extensions", []string{"security-insights.yml", "security-insights.yaml"}, gemara.Failed, "Found 2 Security Insights files at the repository root (security-insights.yml, security-insights.yaml); keep only security-insights.yml"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

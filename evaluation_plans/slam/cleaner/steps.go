@@ -14,15 +14,19 @@ import (
 const requiredFileName = "security-insights.yml"
 
 func FileNamedSecurityInsightsYml(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	if slices.Contains(payload.RootEntries, requiredFileName) {
-		return gemara.Passed, "Security Insights file is named " + requiredFileName, gemara.High
-	}
+	var found []string
 	for _, entry := range payload.RootEntries {
-		for _, name := range si.SecurityInsightsFilenames() {
-			if strings.EqualFold(entry, name) {
-				return gemara.Failed, fmt.Sprintf("Security Insights file is named %s; the badge requires the lowercase name %s", entry, requiredFileName), gemara.High
-			}
+		if slices.ContainsFunc(si.SecurityInsightsFilenames(), func(name string) bool { return strings.EqualFold(entry, name) }) {
+			found = append(found, entry)
 		}
+	}
+	switch {
+	case len(found) > 1:
+		return gemara.Failed, fmt.Sprintf("Found %d Security Insights files at the repository root (%s); keep only %s", len(found), strings.Join(found, ", "), requiredFileName), gemara.High
+	case slices.Contains(found, requiredFileName):
+		return gemara.Passed, "Security Insights file is named " + requiredFileName, gemara.High
+	case len(found) == 1:
+		return gemara.Failed, fmt.Sprintf("Security Insights file is named %s; the badge requires the lowercase name %s", found[0], requiredFileName), gemara.High
 	}
 	return gemara.Failed, "No " + requiredFileName + " found at the repository root", gemara.High
 }

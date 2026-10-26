@@ -164,7 +164,7 @@ func TestAIReviewDocumentation(t *testing.T) {
 
 	result, message, confidence := AIReviewDocumentation(payload)
 
-	if result != gemara.Passed || confidence != gemara.High || !strings.Contains(message, "Every declared document covers its topic") {
+	if result != gemara.Passed || confidence != gemara.High || message != "[AI-Assisted] All documents are real. [AI input was incomplete: https://github.com/example/widget/releases/tag/{version}: URL contains a placeholder]" {
 		t.Fatalf("got %v %v %q", result, confidence, message)
 	}
 	golden, err := os.ReadFile("testdata/chronicler_documentation_quality_prompt.golden")
@@ -221,7 +221,7 @@ func TestDocumentationEvidenceCaps(t *testing.T) {
 	payload.Insights.Repository.Documentation.Governance = ptrTo(si.URL("https://example.org/gov"))
 	payload.Insights.Repository.Documentation.ReviewPolicy = ptrTo(si.URL("https://example.org/review"))
 
-	material, _ := documentationEvidence(payload)
+	material, _, _ := documentationEvidence(payload)
 
 	var packet documentationMaterial
 	if err := json.Unmarshal([]byte(material), &packet); err != nil {
@@ -248,7 +248,7 @@ func TestLongDocumentStartsAtSection(t *testing.T) {
 		return data.FetchedURL{URL: url, StatusCode: 200, Body: []byte(body)}, nil
 	})
 
-	material, _ := documentationEvidence(newPayload())
+	material, _, _ := documentationEvidence(newPayload())
 
 	var packet documentationMaterial
 	if err := json.Unmarshal([]byte(material), &packet); err != nil {

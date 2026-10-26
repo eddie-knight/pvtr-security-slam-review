@@ -83,6 +83,7 @@ type evidenceCollectionMetadata struct {
 	Scope       string   `json:"scope"`
 	Note        string   `json:"note,omitempty"`
 	Unretrieved []string `json:"unretrieved,omitempty"`
+	Truncated   []string `json:"truncated,omitempty"`
 }
 
 type selfAssessmentAIEvidence struct {
@@ -117,7 +118,7 @@ func AIReviewSelfAssessment(payload data.Payload) (result gemara.Result, message
 		packet.SelfAssessment.Name = *self.Name
 	}
 	budget := maxAssessmentContentBytes
-	packet.Document.Content = documentContent(fetched, &budget, &packet.Collection)
+	packet.Document.Content = documentContent(url, fetched, &budget, &packet.Collection)
 	sources := []string{url}
 	for i, link := range sameRepoLinks(url, string(fetched.Body)) {
 		if i == maxLinkedDocuments || budget == 0 {
@@ -132,36 +133,42 @@ func AIReviewSelfAssessment(payload data.Payload) (result gemara.Result, message
 		case linked.StatusCode < 200 || linked.StatusCode > 299:
 			packet.Collection.Unretrieved = append(packet.Collection.Unretrieved, fmt.Sprintf("%s: HTTP %d", link, linked.StatusCode))
 		default:
-			packet.Linked = append(packet.Linked, assessmentDocument{SourceURL: link, FinalURL: linked.FinalURL, ContentType: linked.ContentType, Content: documentContent(linked, &budget, &packet.Collection)})
+			packet.Linked = append(packet.Linked, assessmentDocument{SourceURL: link, FinalURL: linked.FinalURL, ContentType: linked.ContentType, Content: documentContent(link, linked, &budget, &packet.Collection)})
 			sources = append(sources, link)
 			continue
 		}
 		packet.Collection.Complete = false
 	}
 	if !packet.Collection.Complete {
-		packet.Collection.Note = "Some content is missing: a document was truncated (its content ends early) or a linked file listed in unretrieved was not supplied."
+		packet.Collection.Note = "Some content is missing: a document listed in truncated ends early, or a linked file listed in unretrieved was not supplied."
 	}
 
 	material, err := json.Marshal(packet)
 	if err != nil {
 		return gemara.NeedsReview, "Self-assessment evidence could not be prepared for AI review: " + err.Error(), gemara.Low
 	}
-	return reusable_steps.AIReview(payload, behavior, string(material), sources)
+	incomplete := packet.Collection.Unretrieved
+	for _, source := range packet.Collection.Truncated {
+		incomplete = append(incomplete, source+" truncated")
+	}
+	return reusable_steps.AIReview(payload, behavior, string(material), sources, incomplete)
 }
 
 // documentContent is the fetched text, HTML reduced to words, cut to what is
 // left of budget. Truncation marks the collection incomplete.
-func documentContent(fetched data.FetchedURL, budget *int, collection *evidenceCollectionMetadata) string {
+func documentContent(source string, fetched data.FetchedURL, budget *int, collection *evidenceCollectionMetadata) string {
 	content := string(fetched.Body)
 	if strings.Contains(strings.ToLower(fetched.ContentType), "text/html") {
 		content = htmlToText(content)
 	}
-	if fetched.Truncated {
-		collection.Complete = false
-	}
+	truncated := fetched.Truncated
 	if len(content) > *budget {
 		content = strings.ToValidUTF8(content[:*budget], "")
+		truncated = true
+	}
+	if truncated {
 		collection.Complete = false
+		collection.Truncated = append(collection.Truncated, source)
 	}
 	*budget -= len(content)
 	return content

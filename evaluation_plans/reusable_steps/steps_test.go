@@ -49,7 +49,7 @@ func TestAIReviewLowConfidenceNeedsReview(t *testing.T) {
 		}
 		body := `{"result":"` + result + `","confidence":"` + confidence + `","message":"m","explanation":"e"}`
 		NewAIClient = func(sdkconfig.Config) (sdkai.Client, error) { return fakeAIClient{body}, nil }
-		got, _, _ := AIReview(payload, "chronicler-documentation-quality", "{}", nil)
+		got, _, _ := AIReview(payload, "chronicler-documentation-quality", "{}", nil, nil)
 		if got != want {
 			t.Errorf("%s/%s: got %s, want %s", result, confidence, got, want)
 		}

@@ -198,3 +198,30 @@ func TestGrcStore(t *testing.T) {
 		t.Fatalf("want hub error detail, got %v", err)
 	}
 }
+
+func TestValidateMaturityLevel(t *testing.T) {
+	tests := []struct {
+		name          string
+		applicability []string
+		level         any
+		wantErr       bool
+	}{
+		{"chronicler without level", []string{"cleaner", "chronicler"}, nil, true},
+		{"defender with empty string", []string{"defender"}, "", true},
+		{"out of range", []string{"defender"}, 4, true},
+		{"numeric string", []string{"chronicler"}, "2", false},
+		{"int", []string{"defender"}, 3, false},
+		{"not needed by these badges", []string{"cleaner", "mechanizer"}, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &config.Config{Policy: config.Policy{Applicability: tt.applicability}, Vars: map[string]any{}}
+			if tt.level != nil {
+				c.Vars["maturity_level"] = tt.level
+			}
+			if err := validateMaturityLevel(c); (err != nil) != tt.wantErr {
+				t.Errorf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

@@ -44,7 +44,13 @@ func BaselineDocumentationControlsMet(payload data.Payload) (result gemara.Resul
 	if payload.Config == nil {
 		return gemara.NeedsReview, "No plugin configuration to load the OSPS Baseline scanner's repository data", gemara.Low
 	}
-	loaded, err := loadScanner(payload.Config)
+	// Name the scanner's logger so its own warnings (e.g. two Security
+	// Insights files, which Cleaner reports) do not print as bare lines.
+	scanConfig := *payload.Config
+	if scanConfig.Logger != nil {
+		scanConfig.Logger = scanConfig.Logger.Named("SLAM-CH-01.01 osps-baseline-scanner")
+	}
+	loaded, err := loadScanner(&scanConfig)
 	if err != nil {
 		return gemara.NeedsReview, "Could not load the OSPS Baseline scanner's repository data: " + err.Error(), gemara.Low
 	}

@@ -31,8 +31,7 @@ var (
 		"SLAM-ME-01.01": {
 			reusable_steps.HasSecurityInsightsFile,
 			mechanizer.BaselineScannerListedInTools,
-			mechanizer.ScannerWorkflowRecurring,
-			mechanizer.ScannerWorkflowAvoidsPullRequestTarget,
+			mechanizer.ScannerWorkflowRequirements,
 		},
 		"SLAM-IN-01.01": {
 			reusable_steps.HasSecurityInsightsFile,

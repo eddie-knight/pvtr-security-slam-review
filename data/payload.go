@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/gemaraproj/go-gemara"
@@ -175,11 +176,52 @@ func (p Payload) ClearEvidence() {
 // Loader builds the Payload: repository metadata, root listing, and the
 // Security Insights file. Everything else is fetched lazily by the methods.
 func Loader(config *config.Config) (payload any, err error) {
+	if err := validateMaturityLevel(config); err != nil {
+		return nil, err
+	}
 	p := newPayload(config)
 	if err := p.load(); err != nil {
 		return nil, err
 	}
 	return any(*p), nil
+}
+
+// maturityBadges are the badges whose checks depend on maturity_level.
+var maturityBadges = []string{"chronicler", "defender"}
+
+// validateMaturityLevel fails the target before any request when a badge
+// that needs maturity_level is applicable and the var is missing or not 1-3:
+// a guessed level would judge the project against the wrong controls.
+func validateMaturityLevel(c *config.Config) error {
+	if !slices.ContainsFunc(c.Policy.Applicability, func(a string) bool { return slices.Contains(maturityBadges, a) }) {
+		return nil
+	}
+	if _, ok := MaturityLevel(c); !ok {
+		got := "it is missing"
+		if value, _ := c.GetVar("maturity_level"); value != nil {
+			got = fmt.Sprintf("got %q", fmt.Sprint(value))
+		}
+		return fmt.Errorf("maturity_level must be 1, 2, or 3 when chronicler or defender is applicable; %s", got)
+	}
+	return nil
+}
+
+// MaturityLevel reads the maturity_level var as an int or a numeric string.
+func MaturityLevel(c *config.Config) (int, bool) {
+	if c == nil {
+		return 0, false
+	}
+	value, _ := c.GetVar("maturity_level")
+	var level int
+	switch v := value.(type) {
+	case int:
+		level = v
+	case float64:
+		level = int(v)
+	case string:
+		level, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	return level, level >= 1 && level <= 3
 }
 
 // newPayload wires the clients without touching the network.

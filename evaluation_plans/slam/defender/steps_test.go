@@ -332,7 +332,7 @@ func Test_AIReviewUncheckedControlEvidence(t *testing.T) {
 
 	result, message, confidence := AIReviewUncheckedControlEvidence(payload)
 
-	if result != gemara.Failed || confidence != gemara.High || message != "[AI-Assisted] OSPS-SA-03.01 has no followable evidence" {
+	if result != gemara.Failed || confidence != gemara.High || message != "[AI-Assisted] The self assessment is still in progress. [AI input was incomplete: https://strimzi.io/documentation/: HTTP 404]" {
 		t.Errorf("got %v %v %q", result, confidence, message)
 	}
 	golden := readFixture(t, "unchecked_control_evidence_prompt.golden", nil)

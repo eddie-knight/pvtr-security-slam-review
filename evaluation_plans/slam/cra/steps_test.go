@@ -181,7 +181,7 @@ func TestAIReviewReadinessPrompt(t *testing.T) {
 
 	result, message, confidence := AIReviewReadiness(payload)
 
-	if result != gemara.Passed || confidence != gemara.High || !strings.Contains(message, "Steward asks are met") {
+	if result != gemara.Passed || confidence != gemara.High || message != "[AI-Assisted] Reporting process and escalation section present." {
 		t.Fatalf("got %v %v %q", result, confidence, message)
 	}
 	golden, err := os.ReadFile("testdata/cra_readiness_quality_prompt.golden")

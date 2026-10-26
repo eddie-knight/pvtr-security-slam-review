@@ -128,7 +128,7 @@ func AIReviewReadiness(payload data.Payload) (result gemara.Result, message stri
 			sources = append(sources, doc.Source)
 		}
 	}
-	return reusable_steps.AIReview(payload, "cra-readiness-quality", string(raw), sources)
+	return reusable_steps.AIReview(payload, "cra-readiness-quality", string(raw), sources, packet.Collection.Notes)
 }
 
 type document struct {
