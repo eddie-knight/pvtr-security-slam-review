@@ -64,8 +64,11 @@ func TestBaselineDocumentationControlsMet(t *testing.T) {
 		{"level 3 control counted at level 3", 3, nil, with("OSPS-DO-04.01", step(gemara.Failed, "no support")), gemara.Failed, "OSPS-DO-04.01: no support"},
 		{"failed step stops the control", 1, nil, with("OSPS-DO-01.01", step(gemara.Failed, "no SI"), pass), gemara.Failed, "OSPS-DO-01.01: no SI"},
 		{"not applicable settles the control", 2, nil, with("OSPS-DO-06.01", step(gemara.NotApplicable, "not code"), step(gemara.Failed, "x")), gemara.Passed, ""},
-		{"needs review", 1, nil, with("OSPS-DO-02.01", step(gemara.NeedsReview, "unclear")), gemara.NeedsReview, "OSPS-DO-02.01: unclear"},
+		// Needs Review alone does not block Chronicler (Eddie's 23:15 ruling).
+		{"needs review", 1, nil, with("OSPS-DO-02.01", step(gemara.NeedsReview, "unclear")), gemara.Passed, "need review (this does not block Chronicler): OSPS-DO-02.01: unclear"},
+		{"failure beside needs review still fails", 1, nil, with("OSPS-DO-02.01", step(gemara.Failed, "missing")), gemara.Failed, "OSPS-DO-02.01: missing"},
 	}
+	t.Cleanup(func() { baselineNotes.Clear() })
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stubScanner(t, tt.loadErr, tt.steps)
@@ -78,5 +81,32 @@ func TestBaselineDocumentationControlsMet(t *testing.T) {
 				t.Errorf("got %s %q; want %s containing %q", got, msg, tt.want, tt.inMsg)
 			}
 		})
+	}
+}
+
+// With the Baseline step at Needs Review only and the AI passing, Chronicler
+// passes, and the AI step's message, the one the log keeps, carries the notes.
+func TestChroniclerPassesOverBaselineNeedsReview(t *testing.T) {
+	t.Cleanup(func() { baselineNotes.Clear() })
+	pass := step(gemara.Passed, "ok")
+	steps := map[string][]scanner.TypedStep{}
+	for _, control := range documentationControls {
+		steps[control.id] = []scanner.TypedStep{pass}
+	}
+	steps["OSPS-DO-02.01"] = []scanner.TypedStep{step(gemara.NeedsReview, "unclear")}
+	stubScanner(t, nil, steps)
+	stubFetch(t, okFetch)
+	stubAIClient(t, &fakeAIClient{body: `{"result":"pass","confidence":"high","message":"ok","explanation":"All documents are real."}`})
+	payload := newPayload()
+	payload.Config.Vars = map[string]any{"maturity_level": 1}
+
+	baseline, _, _ := BaselineDocumentationControlsMet(payload)
+	ai, message, _ := AIReviewDocumentation(payload)
+
+	if got := gemara.UpdateAggregateResult(baseline, ai); got != gemara.Passed {
+		t.Errorf("Chronicler = %v, want Passed", got)
+	}
+	if !strings.Contains(message, "[Baseline step: OSPS Baseline documentation controls at maturity level 1 need review (this does not block Chronicler): OSPS-DO-02.01: unclear]") {
+		t.Errorf("AI message lacks the Baseline notes: %q", message)
 	}
 }

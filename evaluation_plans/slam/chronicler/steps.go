@@ -212,7 +212,12 @@ const collectionScope = "Each documentation URL declared in the Security Insight
 
 func AIReviewDocumentation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	material, sources, incomplete := documentationEvidence(payload)
-	return reusable_steps.AIReview(payload, "chronicler-documentation-quality", material, sources, incomplete)
+	result, message, confidence = reusable_steps.AIReview(payload, "chronicler-documentation-quality", material, sources, incomplete)
+	// Only the last step's message reaches the log, so repeat the Baseline step's notes.
+	if note, ok := baselineNotes.Load(noteKey(payload)); ok {
+		message += " [Baseline step: " + note.(string) + "]"
+	}
+	return result, message, confidence
 }
 
 // documentationEvidence groups declarations by URL, so a document declared for

@@ -3,6 +3,7 @@ package chronicler
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/eddie-knight/pvtr-security-slam-review/data"
 	"github.com/eddie-knight/pvtr-security-slam-review/evaluation_plans/reusable_steps"
@@ -50,6 +51,7 @@ var documentationControls = []struct {
 // BaselineDocumentationControlsMet runs the OSPS Baseline scanner's own steps
 // for every documentation-shaped control at the project's maturity level.
 func BaselineDocumentationControlsMet(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	baselineNotes.Delete(noteKey(payload))
 	level, ok := reusable_steps.MaturityLevel(payload)
 	if !ok {
 		return gemara.NeedsReview, reusable_steps.MaturityLevelMissing, gemara.Low
@@ -89,9 +91,21 @@ func BaselineDocumentationControlsMet(payload data.Payload) (result gemara.Resul
 	case len(failed) > 0:
 		return gemara.Failed, fmt.Sprintf("OSPS Baseline documentation controls at maturity level %d not met: %s", level, strings.Join(failed, "; ")), gemara.High
 	case len(unresolved) > 0:
-		return gemara.NeedsReview, fmt.Sprintf("OSPS Baseline documentation controls at maturity level %d need review: %s", level, strings.Join(unresolved, "; ")), gemara.Medium
+		// Eddie's ruling: controls the scanner cannot decide do not block
+		// Chronicler; they are reported with the AI verdict instead.
+		note := fmt.Sprintf("OSPS Baseline documentation controls at maturity level %d need review (this does not block Chronicler): %s", level, strings.Join(unresolved, "; "))
+		baselineNotes.Store(noteKey(payload), note)
+		return gemara.Passed, note, gemara.Medium
 	}
 	return gemara.Passed, fmt.Sprintf("Every OSPS Baseline documentation control at maturity level %d passed the scanner's checks", level), gemara.High
+}
+
+// baselineNotes carries a target's Needs Review notes from the Baseline step
+// to the AI step, whose message is the only one the log keeps.
+var baselineNotes sync.Map
+
+func noteKey(payload data.Payload) string {
+	return payload.Owner + "/" + payload.Repo + "@" + payload.Commit
 }
 
 // runScannerSteps mirrors how gemara runs a control's steps: results

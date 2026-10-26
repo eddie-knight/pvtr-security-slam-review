@@ -164,6 +164,9 @@ func TestAIReviewDocumentation(t *testing.T) {
 
 	result, message, confidence := AIReviewDocumentation(payload)
 
+	if !strings.Contains(client.prompt, "an index page that links to the project's usage guides counts as a user guide") {
+		t.Error("rubric does not accept an index page of guides as a user guide")
+	}
 	if result != gemara.Passed || confidence != gemara.High || message != "[AI-Assisted] All documents are real. [AI input was incomplete: https://github.com/example/widget/releases/tag/{version}: URL contains a placeholder]" {
 		t.Fatalf("got %v %v %q", result, confidence, message)
 	}
