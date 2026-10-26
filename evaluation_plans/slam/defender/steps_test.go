@@ -125,7 +125,7 @@ func Test_Strimzi(t *testing.T) {
 		}
 	}
 	result, message, _ := LatestResultHasNoFailures(payload)
-	want := "The latest OSPS Baseline result for strimzi/strimzi-kafka-operator (1.3.0-20261025T171208Z, scanner 0.33.0) reports 1 failed control(s) at maturity level 2: OSPS-QA-03.01"
+	want := "The latest OSPS Baseline result for strimzi/strimzi-kafka-operator (1.3.0-20261025T171208Z, scanner 0.33.0) reports 1 failed control(s) at maturity level 2: OSPS-QA-03.01; separately, 2 result(s) are stale scanner results, not project failures: scanner 0.33.0 predates the fixes in v0.33.1, so re-publish with v0.33.1 or later: OSPS-BR-07.01 Not Run, OSPS-VM-02.01 Not Run"
 	if result != gemara.Failed || message != want {
 		t.Errorf("LatestResultHasNoFailures = %v %q, want Failed %q", result, message, want)
 	}
@@ -284,6 +284,7 @@ func Test_LatestResultHasNoFailures(t *testing.T) {
 		{"maturity-1-only entry a level-2 scan skipped", 2, logWith(passedL1, skippedL1Only), nil, gemara.NeedsReview, "tags them only for lower levels, so the scan did not evaluate them; check them by hand: OSPS-BR-07.01", "0.33.1"},
 		{"stale scanner skipped BR-07.01", 2, logWith(passedL1, skippedL1Only), nil, gemara.NeedsReview, "1 result(s) are stale scanner results, not project failures: scanner 0.33.0 predates the fixes in v0.33.1, so re-publish with v0.33.1 or later: OSPS-BR-07.01 Not Run", ""},
 		{"stale binary scan Unknown", 2, logWith(passedL1, staleBinaryScan), nil, gemara.NeedsReview, "stale scanner results, not project failures: scanner 0.33.0 predates the fixes in v0.33.1, so re-publish with v0.33.1 or later: OSPS-QA-05.01 Unknown", ""},
+		{"failure keeps stale results apart", 2, logWith(failedL1, skippedL1Only), nil, gemara.Failed, "1 failed control(s) at maturity level 2: OSPS-VM-02.01; separately, 1 result(s) are stale scanner results, not project failures", ""},
 		{"stale workflow parse error", 2, logWith(passedL1, staleWorkflowParse), nil, gemara.NeedsReview, "OSPS-BR-01.01 Needs Review", ""},
 		{"binary scan Unknown from a fixed scanner", 2, logWith(passedL1, staleBinaryScan), nil, gemara.NeedsReview, "re-scan or check them by hand: OSPS-QA-05.01", "0.33.1"},
 		{"unknown scanner version is not judged stale", 2, logWith(passedL1, staleBinaryScan), nil, gemara.NeedsReview, "scanner unknown) has no failed controls at maturity level 2, but the scanner could not determine", "-"},

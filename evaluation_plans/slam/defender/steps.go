@@ -173,11 +173,16 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 			skipped = append(skipped, entry.Requirement.EntryID)
 		}
 	}
+	// A failure still fails, but the stale results are named beside it.
+	var staleSuffix string
+	if len(stale) > 0 {
+		staleSuffix = "; separately, " + staleNote(latest, stale)
+	}
 	if len(failed) > 0 {
-		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports %d failed control(s) at maturity level %d: %s", namespace, id, resultLabel(latest), len(failed), level, strings.Join(failed, ", ")), gemara.High
+		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports %d failed control(s) at maturity level %d: %s", namespace, id, resultLabel(latest), len(failed), level, strings.Join(failed, ", ")) + staleSuffix, gemara.High
 	}
 	if len(skipped) > 0 {
-		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) did not evaluate %d control(s) that apply at maturity level %d (%s); publish a scan at maturity level %d", namespace, id, resultLabel(latest), len(skipped), level, strings.Join(skipped, ", "), level), gemara.High
+		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) did not evaluate %d control(s) that apply at maturity level %d (%s); publish a scan at maturity level %d", namespace, id, resultLabel(latest), len(skipped), level, strings.Join(skipped, ", "), level) + staleSuffix, gemara.High
 	}
 	var gaps []string
 	if len(untagged) > 0 {
