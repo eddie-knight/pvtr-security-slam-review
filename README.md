@@ -15,8 +15,8 @@ quality, which only happens when the fixed checks did not fail.
 | Mechanizer | SLAM-ME-01.01 | scanner listed under tools (flags a single ad hoc run); scanner workflow on schedule/push/release; no `pull_request_target` | none |
 | Inspector | SLAM-IN-01.01 | `assessments.self.evidence` declared and resolves | coverage and project-specificity |
 | Defender | SLAM-DE-01.01 | grc.store target declared; result published, recurring, from a trusted publisher | none |
-| Defender | SLAM-DE-01.02 | latest published result has no failed controls | written evidence for unchecked controls |
-| CRA Readiness | SLAM-CR-01.01 | policy and contributing links; LF stewardship (or out-of-scope) statement verbatim in SECURITY.md | reporting process and steward escalation |
+| Defender | SLAM-DE-01.02 | latest published result has no failed or unknown controls at the project's maturity level, and the scan ran at that level | written evidence for unchecked controls |
+| CRA Readiness | SLAM-CR-01.01 | policy and contributing links; LF stewardship (or out-of-scope) statement verbatim in the linked policy (SECURITY.md when none is linked) | reporting process and steward escalation |
 
 Defender reads the public grc.store hub API (`https://hub.grc.store`, override with `grc_store_url`).
 
@@ -28,4 +28,5 @@ make build
 ```
 
 See [example-config.yml](example-config.yml). Pick badges with `policy.applicability`. Without
-`ai_provider`, `ai_model`, and `ai_api_key`, the AI steps return Needs Review.
+`ai_provider`, `ai_model`, and `ai_api_key`, the AI steps return Needs Review, as do low-confidence AI verdicts.
+Defender needs `maturity_level` (1-3), set by whoever runs the review; the project does not choose it.

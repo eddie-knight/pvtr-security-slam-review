@@ -96,6 +96,7 @@ func strimziPayload(t *testing.T) data.Payload {
 		Owner: "strimzi", Repo: "strimzi-kafka-operator",
 		InsightsPath: "security-insights.yml", Insights: *insights,
 		Evidence: &gemara.EvidenceCollector{},
+		Config:   &sdkconfig.Config{Vars: map[string]any{"maturity_level": 2}},
 	}
 }
 
@@ -128,7 +129,7 @@ func Test_Strimzi(t *testing.T) {
 		}
 	}
 	result, message, _ := LatestResultHasNoFailures(payload)
-	want := "The latest OSPS Baseline result for strimzi/strimzi-kafka-operator (1.3.0-20261025T171208Z) reports 1 failed control(s): OSPS-QA-03.01"
+	want := "The latest OSPS Baseline result for strimzi/strimzi-kafka-operator (1.3.0-20261025T171208Z) reports 1 failed or unknown control(s) at maturity level 2: OSPS-QA-03.01"
 	if result != gemara.Failed || message != want {
 		t.Errorf("LatestResultHasNoFailures = %v %q, want Failed %q", result, message, want)
 	}
@@ -243,21 +244,53 @@ func Test_TrustedPublisher(t *testing.T) {
 	}
 }
 
-func Test_LatestResultHasNoFailures(t *testing.T) {
-	h := strimziHub(t)
-	h.target.Versions[0].Latest.Counts.Failed = 0
-	h.install(t)
-	if result, message, _ := LatestResultHasNoFailures(strimziPayload(t)); result != gemara.Passed {
-		t.Errorf("no failures: got %v (%s), want Passed", result, message)
-	}
+// logWith is a published log holding the given assessment-log entries.
+func logWith(entries ...string) []byte {
+	return []byte(`{"evaluations":[{"assessment-logs":[` + strings.Join(entries, ",") + `]}]}`)
+}
 
-	// The count decides; an unreadable log only loses the control names.
-	h = strimziHub(t)
-	h.logErr = errors.New("boom")
-	h.install(t)
-	result, message, _ := LatestResultHasNoFailures(strimziPayload(t))
-	if result != gemara.Failed || !strings.HasSuffix(message, "reports 1 failed control(s)") {
-		t.Errorf("log unavailable: got %v %q, want Failed without control names", result, message)
+const (
+	passedL1  = `{"requirement":{"entry-id":"OSPS-AC-01.01"},"result":"Passed","applicability":["maturity-1","maturity-2","maturity-3"],"steps-executed":1}`
+	unknownL1 = `{"requirement":{"entry-id":"OSPS-AC-02.01"},"result":"Unknown","applicability":["maturity-1","maturity-2","maturity-3"],"steps-executed":1}`
+	skippedL2 = `{"requirement":{"entry-id":"OSPS-AC-04.01"},"result":"Not Run","applicability":["maturity-2","maturity-3"],"steps-executed":0}`
+	failedL1  = `{"requirement":{"entry-id":"OSPS-VM-02.01"},"result":"Failed","applicability":["maturity-1"],"steps-executed":1}`
+)
+
+func Test_LatestResultHasNoFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		level   any
+		log     []byte
+		logErr  error
+		want    gemara.Result
+		wantMsg string
+	}{
+		{"all passed", 2, logWith(passedL1), nil, gemara.Passed, "no failed controls at maturity level 2"},
+		{"level as string", "2", logWith(passedL1), nil, gemara.Passed, "maturity level 2"},
+		{"unknown fails", 2, logWith(passedL1, unknownL1), nil, gemara.Failed, "OSPS-AC-02.01"},
+		{"level-1 scan against level 2", 2, logWith(passedL1, skippedL2), nil, gemara.Failed, "publish a scan at maturity level 2"},
+		{"level-2 skip ignored at level 1", 1, logWith(passedL1, skippedL2), nil, gemara.Passed, "maturity level 1"},
+		{"maturity-1-only entry ignored at level 2", 2, logWith(passedL1, failedL1), nil, gemara.Passed, "maturity level 2"},
+		{"maturity-1-only entry counts at level 1", 1, logWith(passedL1, failedL1), nil, gemara.Failed, "OSPS-VM-02.01"},
+		{"log unreadable", 2, nil, errors.New("boom"), gemara.NeedsReview, "boom"},
+		{"level missing", nil, logWith(passedL1), nil, gemara.NeedsReview, "maturity_level"},
+		{"level out of range", 4, logWith(passedL1), nil, gemara.NeedsReview, "maturity_level"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := strimziHub(t)
+			h.log, h.logErr = tt.log, tt.logErr
+			h.install(t)
+			payload := strimziPayload(t)
+			payload.Config.Vars = map[string]any{}
+			if tt.level != nil {
+				payload.Config.Vars["maturity_level"] = tt.level
+			}
+			result, message, _ := LatestResultHasNoFailures(payload)
+			if result != tt.want || !strings.Contains(message, tt.wantMsg) {
+				t.Errorf("got %v %q, want %v containing %q", result, message, tt.want, tt.wantMsg)
+			}
+		})
 	}
 }
 
@@ -300,7 +333,6 @@ func Test_AIReviewUncheckedControlEvidence(t *testing.T) {
 	client := &fakeAIClient{}
 	stubAIClient(t, client)
 	payload := strimziPayload(t)
-	payload.Config = &sdkconfig.Config{}
 
 	result, message, confidence := AIReviewUncheckedControlEvidence(payload)
 
@@ -319,19 +351,18 @@ func Test_AIReviewUncheckedControlEvidence(t *testing.T) {
 	if packet.PublishedResult.TargetPage != strimziPage || packet.PublishedResult.LogVersion != "1.3.0-20261025T171208Z" {
 		t.Errorf("published result = %+v", packet.PublishedResult)
 	}
-	executed := map[string]bool{}
+	if packet.MaturityLevel != 2 {
+		t.Errorf("maturity_level = %d, want 2", packet.MaturityLevel)
+	}
+	listed := map[string]bool{}
 	for _, control := range packet.UncheckedControls {
-		executed[control.ID] = control.Executed
+		listed[control.ID] = true
 	}
-	// 4 Needs Review + 9 Not Run in the published counts; the log also lists
-	// the controls the level-2 scan skipped.
-	for id, want := range map[string]bool{"OSPS-BR-01.03": true, "OSPS-SA-03.01": true, "OSPS-BR-01.02": true, "OSPS-AC-04.02": false, "OSPS-VM-02.01": false} {
-		if got, ok := executed[id]; !ok || got != want {
-			t.Errorf("%s executed = %v (listed %v), want %v", id, got, ok, want)
+	// At level 2, the maturity-1-only and maturity-3-only entries do not apply.
+	for id, want := range map[string]bool{"OSPS-BR-01.03": true, "OSPS-SA-03.01": true, "OSPS-BR-01.02": true, "OSPS-AC-04.02": false, "OSPS-VM-02.01": false, "OSPS-QA-03.01": false} {
+		if listed[id] != want {
+			t.Errorf("%s listed = %v, want %v", id, listed[id], want)
 		}
-	}
-	if _, ok := executed["OSPS-QA-03.01"]; ok {
-		t.Error("failed control OSPS-QA-03.01 listed as unchecked")
 	}
 	// security-policy and vulnerability-reporting.policy are the same URL
 	wantFetched := []string{
@@ -368,9 +399,19 @@ func Test_AIReviewUncheckedControlEvidence_NoAI(t *testing.T) {
 	stubFetch(t, func(string) (data.FetchedURL, error) { return data.FetchedURL{StatusCode: 200}, nil })
 	stubAIClient(t, nil)
 	payload := strimziPayload(t)
-	payload.Config = &sdkconfig.Config{}
 	if result, _, _ := AIReviewUncheckedControlEvidence(payload); result != gemara.NeedsReview {
 		t.Errorf("got %v, want NeedsReview when AI is not configured", result)
+	}
+}
+
+func Test_AIReviewUncheckedControlEvidence_NoMaturityLevel(t *testing.T) {
+	strimziHub(t).install(t)
+	client := &fakeAIClient{}
+	stubAIClient(t, client)
+	payload := strimziPayload(t)
+	payload.Config.Vars = map[string]any{}
+	if result, message, _ := AIReviewUncheckedControlEvidence(payload); result != gemara.NeedsReview || !strings.Contains(message, "maturity_level") || client.calls != 0 {
+		t.Errorf("got %v %q with %d AI calls, want NeedsReview without AI", result, message, client.calls)
 	}
 }
 
@@ -381,7 +422,6 @@ func Test_AIReviewUncheckedControlEvidence_NothingUnchecked(t *testing.T) {
 	client := &fakeAIClient{}
 	stubAIClient(t, client)
 	payload := strimziPayload(t)
-	payload.Config = &sdkconfig.Config{}
 	if result, _, _ := AIReviewUncheckedControlEvidence(payload); result != gemara.Passed || client.calls != 0 {
 		t.Errorf("got %v with %d AI calls, want Passed without AI", result, client.calls)
 	}

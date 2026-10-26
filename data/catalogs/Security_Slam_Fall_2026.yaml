@@ -101,9 +101,10 @@ controls:
           Insights.
         state: Active
         text: |
-          The latest published OSPS Baseline result MUST report no failed
-          controls, and controls the scanner cannot check MUST have written
-          evidence a reviewer can follow.
+          The latest published OSPS Baseline result MUST be evaluated at the
+          project's maturity level, MUST report no failed or unknown controls
+          at that level, and controls the scanner cannot check MUST have
+          written evidence a reviewer can follow.
     group: DE
     id: SLAM-DE-01
     objective: |
@@ -124,9 +125,9 @@ controls:
           CONTRIBUTING.md.
         state: Active
         text: |
-          The project MUST link its security policy from Security Insights and
-          carry the LF CRA stewardship statement, or the out-of-scope statement,
-          verbatim in SECURITY.md. An in-scope project MUST also link its
+          The project MUST link its security policy from Security Insights, and
+          that policy MUST carry the LF CRA stewardship statement, or the
+          out-of-scope statement, verbatim. An in-scope project MUST also link its
           contributing guide and document its steward escalation path there.
     group: CR
     id: SLAM-CR-01

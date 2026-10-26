@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -107,30 +108,48 @@ func TestSecurityInsightsLinksPresent(t *testing.T) {
 
 func TestSecurityPolicyHasStewardStatement(t *testing.T) {
 	tests := []struct {
-		name    string
-		urls    map[string]string
-		files   map[string]string
-		result  gemara.Result
-		message string
+		name     string
+		unlinked bool
+		urls     map[string]string
+		files    map[string]string
+		result   gemara.Result
+		message  string
 	}{
-		{"declared link, line-wrapped", map[string]string{policyURL: wrapped}, nil, gemara.Passed, "appears verbatim in " + policyURL},
-		{"falls back to .github/SECURITY.md", nil, map[string]string{".github/SECURITY.md": wrapped}, gemara.Passed, "appears verbatim in .github/SECURITY.md"},
-		{"declared link lacks it, repo file has it", map[string]string{policyURL: "# Security"}, map[string]string{"SECURITY.md": wrapped}, gemara.Passed, "appears verbatim in SECURITY.md"},
-		{"out-of-scope statement, line-wrapped", map[string]string{policyURL: strings.ReplaceAll(OutOfScopeStatement, " being used", "\nbeing used")}, nil, gemara.Passed, "out-of-scope statement appears verbatim in " + policyURL},
-		{"both statements: LF wins", map[string]string{policyURL: OutOfScopeStatement + "\n\n" + wrapped}, nil, gemara.Passed, "LF CRA stewardship statement appears"},
-		{"statement absent", map[string]string{policyURL: "# Security\nEmail us."}, map[string]string{"SECURITY.md": "# Security"}, gemara.Failed, "appears verbatim in " + policyURL + ", SECURITY.md"},
-		{"reworded statement", map[string]string{policyURL: strings.Replace(StewardStatement, "CRA stewardship:", "**CRA stewardship:**", 1)}, nil, gemara.Failed, "Neither"},
-		{"no policy anywhere", nil, nil, gemara.Failed, "No security policy could be retrieved"},
+		{"declared link, line-wrapped", false, map[string]string{policyURL: wrapped}, nil, gemara.Passed, "appears verbatim in " + policyURL},
+		{"no link: falls back to .github/SECURITY.md", true, nil, map[string]string{".github/SECURITY.md": wrapped}, gemara.Passed, "appears verbatim in .github/SECURITY.md"},
+		{"declared link lacks it, repo file has it", false, map[string]string{policyURL: "# Security"}, map[string]string{"SECURITY.md": wrapped}, gemara.Failed, "appears verbatim in " + policyURL},
+		{"declared link unresolvable, repo file has it", false, nil, map[string]string{"SECURITY.md": wrapped}, gemara.Failed, "linked from Security Insights could not be retrieved: " + policyURL},
+		{"rendered HTML policy with auto-linked URL", false, map[string]string{policyURL: renderedPolicy(StewardStatement)}, nil, gemara.Passed, "LF CRA stewardship statement appears verbatim"},
+		{"rendered HTML out-of-scope statement", false, map[string]string{policyURL: renderedPolicy(OutOfScopeStatement)}, nil, gemara.Passed, "out-of-scope statement appears verbatim"},
+		{"markdown missing the out-of-scope link URL", false, map[string]string{policyURL: renderedOutOfScope}, nil, gemara.Failed, "Neither"},
+		{"out-of-scope statement, line-wrapped", false, map[string]string{policyURL: strings.ReplaceAll(OutOfScopeStatement, " being used", "\nbeing used")}, nil, gemara.Passed, "out-of-scope statement appears verbatim in " + policyURL},
+		{"both statements: LF wins", false, map[string]string{policyURL: OutOfScopeStatement + "\n\n" + wrapped}, nil, gemara.Passed, "LF CRA stewardship statement appears"},
+		{"statement absent", false, map[string]string{policyURL: "# Security\nEmail us."}, map[string]string{"SECURITY.md": "# Security"}, gemara.Failed, "appears verbatim in " + policyURL},
+		{"reworded statement", false, map[string]string{policyURL: strings.Replace(StewardStatement, "CRA stewardship:", "**CRA stewardship:**", 1)}, nil, gemara.Failed, "Neither"},
+		{"no policy anywhere", true, nil, nil, gemara.Failed, "No security policy could be retrieved"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			stubSources(t, test.urls, test.files)
-			result, message, _ := SecurityPolicyHasStewardStatement(craPayload())
+			payload := craPayload()
+			if test.unlinked {
+				payload.Insights.Project.VulnerabilityReporting.Policy = nil
+			}
+			result, message, _ := SecurityPolicyHasStewardStatement(payload)
 			if result != test.result || !strings.Contains(message, test.message) {
 				t.Errorf("got %v %q, want %v containing %q", result, message, test.result, test.message)
 			}
 		})
 	}
+}
+
+// renderedPolicy is statement as GitHub renders a SECURITY.md page: its URLs
+// auto-linked and the markdown link turned into an anchor.
+func renderedPolicy(statement string) string {
+	body := regexp.MustCompile(`\[([^\]]*)\]\(([^)]*)\)`).ReplaceAllString(statement, `<a href="$2">$1</a>`)
+	body = strings.Replace(body, "https://www.linuxfoundation.org/security", `<a href="https://www.linuxfoundation.org/security" rel="nofollow">https://www.linuxfoundation.org/security</a>`, 1)
+	body = strings.ReplaceAll(body, "project's", "project&#39;s")
+	return "<!DOCTYPE html><html><head><title>Security</title><script>x()</script></head><body><nav>Skip</nav><article><h1>Security</h1><p>" + body + "</p></article></body></html>"
 }
 
 type fakeAIClient struct {

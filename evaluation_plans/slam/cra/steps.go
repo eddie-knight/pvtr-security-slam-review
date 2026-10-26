@@ -3,6 +3,8 @@ package cra
 import (
 	"encoding/json"
 	"fmt"
+	"html"
+	"regexp"
 	"strings"
 
 	"github.com/eddie-knight/pvtr-security-slam-review/data"
@@ -27,7 +29,7 @@ const (
 // maxDocumentBytes caps each document sent for AI review.
 const maxDocumentBytes = 24 * 1024
 
-const collectionScope = "The security policy and (unless scope is out_of_scope) the contributing guide linked from Security Insights, falling back to the repository files listed in each document's \"candidates\". Links within those documents were not followed. The badge page asks for no separate readiness checklist document, so none was retrieved."
+const collectionScope = "The security policy linked from Security Insights (the repository files in \"candidates\" only when no policy is linked) and, unless scope is out_of_scope, the contributing guide linked from Security Insights, falling back to the repository files in its \"candidates\". HTML pages were reduced to text. Links within those documents were not followed. The badge page asks for no separate readiness checklist document, so none was retrieved."
 
 var (
 	fetchURL       = (*data.Payload).FetchURL
@@ -44,7 +46,7 @@ func SecurityInsightsLinksPresent(payload data.Payload) (result gemara.Result, m
 	if securityPolicyURL(payload.Insights) == "" {
 		return gemara.Failed, "Security Insights is incomplete for CRA Readiness: project.vulnerability-reporting.policy (or repository.documentation.security-policy) is missing", gemara.High
 	}
-	if policy, _ := securityPolicy(&payload); scopeOf(policy.Content) == outOfScope {
+	if policy, _ := securityPolicy(&payload); scopeOf(policy) == outOfScope {
 		return gemara.Passed, "Security Insights links the security policy, which declares the project out of CRA scope", gemara.High
 	}
 	var problems []string
@@ -65,9 +67,12 @@ func SecurityInsightsLinksPresent(payload data.Payload) (result gemara.Result, m
 func SecurityPolicyHasStewardStatement(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	policy, checked := securityPolicy(&payload)
 	if len(checked) == 0 {
+		if linked := securityPolicyURL(payload.Insights); linked != "" {
+			return gemara.Failed, "The security policy linked from Security Insights could not be retrieved: " + linked, gemara.High
+		}
 		return gemara.Failed, fmt.Sprintf("No security policy could be retrieved from Security Insights or %s", strings.Join(securityPolicyFiles, ", ")), gemara.High
 	}
-	switch scopeOf(policy.Content) {
+	switch scopeOf(policy) {
 	case inScope:
 		return gemara.Passed, "The LF CRA stewardship statement appears verbatim in " + policy.Source, gemara.High
 	case outOfScope:
@@ -84,7 +89,7 @@ func AIReviewReadiness(payload data.Payload) (result gemara.Result, message stri
 	reporting := insights.Project.VulnerabilityReporting
 	policy, _ := securityPolicy(&payload)
 	packet := material{
-		Scope:          scopeOf(policy.Content),
+		Scope:          scopeOf(policy),
 		SecurityPolicy: capDocument(policy),
 		SecurityInsights: insightsDeclarations{
 			ReportsAccepted:   reporting.ReportsAccepted,
@@ -132,6 +137,8 @@ type document struct {
 	Source     string   `json:"source,omitempty"`
 	Content    string   `json:"content,omitempty"`
 	Truncated  bool     `json:"truncated,omitempty"`
+	// Rendered marks content reduced from an HTML page.
+	Rendered bool `json:"-"`
 }
 
 type insightsDeclarations struct {
@@ -158,10 +165,15 @@ type material struct {
 }
 
 // securityPolicy returns the first candidate carrying either statement, else the
-// first readable one, plus every candidate that was read. The declared link
-// often lives in an org-level .github repository, so it is tried first.
+// first readable one, plus every candidate that was read. A policy linked from
+// Security Insights is the only candidate: the badge page checks that the link
+// points at the policy carrying the statement. The repository files are tried
+// only when nothing is linked.
 func securityPolicy(payload *data.Payload) (document, []string) {
-	sources := candidates(securityPolicyURL(payload.Insights), securityPolicyFiles)
+	sources := securityPolicyFiles
+	if linked := securityPolicyURL(payload.Insights); linked != "" {
+		sources = []string{linked}
+	}
 	found := document{Role: "security_policy", Candidates: sources}
 	var checked []string
 	for _, source := range sources {
@@ -171,7 +183,7 @@ func securityPolicy(payload *data.Payload) (document, []string) {
 		}
 		doc.Candidates = sources
 		checked = append(checked, source)
-		if scopeOf(doc.Content) != "" {
+		if scopeOf(doc) != "" {
 			return doc, checked
 		}
 		if found.Source == "" {
@@ -190,6 +202,9 @@ func readDocument(payload *data.Payload, role string, sources []string) document
 			fetched, err := fetchURL(payload, source)
 			if err == nil && fetched.StatusCode >= 200 && fetched.StatusCode < 300 {
 				doc.Source, doc.Content, doc.Truncated = source, string(fetched.Body), fetched.Truncated
+				if isHTML(fetched) {
+					doc.Content, doc.Rendered = htmlToText(doc.Content), true
+				}
 				return doc
 			}
 			continue
@@ -209,18 +224,46 @@ func capDocument(doc document) document {
 	return doc
 }
 
-// scopeOf reports which statement text carries, the LF statement winning.
-// Matching is verbatim except for whitespace, so markdown line wrapping does
-// not matter.
-func scopeOf(text string) string {
-	collapsed := strings.Join(strings.Fields(text), " ")
+// renderedOutOfScope is OutOfScopeStatement as a rendered page shows it: the
+// markdown link reduced to its text.
+var renderedOutOfScope = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`).ReplaceAllString(OutOfScopeStatement, "$1")
+
+// scopeOf reports which statement the document carries, the LF statement
+// winning. Matching is verbatim except for whitespace, so markdown line
+// wrapping does not matter.
+func scopeOf(doc document) string {
+	collapsed := strings.Join(strings.Fields(doc.Content), " ")
 	switch {
 	case strings.Contains(collapsed, StewardStatement):
 		return inScope
-	case strings.Contains(collapsed, OutOfScopeStatement):
+	case strings.Contains(collapsed, OutOfScopeStatement),
+		doc.Rendered && strings.Contains(collapsed, renderedOutOfScope):
 		return outOfScope
 	}
 	return ""
+}
+
+var (
+	htmlSkipped = regexp.MustCompile(`(?is)<(script|style|noscript|svg|head)\b.*?</(script|style|noscript|svg|head)\s*>|<!--.*?-->`)
+	htmlBlock   = regexp.MustCompile(`(?i)</?(br|p|div|h[1-6]|li|ul|ol|tr|td|th|table|pre|blockquote|section|article)\b[^>]*>`)
+	htmlTag     = regexp.MustCompile(`(?s)<[^>]*>`)
+)
+
+func isHTML(fetched data.FetchedURL) bool {
+	if strings.Contains(strings.ToLower(fetched.ContentType), "html") {
+		return true
+	}
+	start := strings.ToLower(strings.TrimSpace(string(fetched.Body[:min(len(fetched.Body), 512)])))
+	return strings.HasPrefix(start, "<!doctype html") || strings.HasPrefix(start, "<html")
+}
+
+// htmlToText reduces a page to its text. Inline tags vanish without a space,
+// so a statement whose URL was auto-linked still matches verbatim. shortcut:
+// regexes, not a parser; switch to x/net/html if markup leaks into the text.
+func htmlToText(page string) string {
+	page = htmlSkipped.ReplaceAllString(page, " ")
+	page = htmlBlock.ReplaceAllString(page, "\n")
+	return html.UnescapeString(htmlTag.ReplaceAllString(page, ""))
 }
 
 func candidates(declared string, files []string) []string {

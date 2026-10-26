@@ -6,6 +6,8 @@ import (
 	"html"
 	"net/url"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,9 +127,14 @@ func TrustedPublisher(payload data.Payload) (result gemara.Result, message strin
 	return gemara.Passed, fmt.Sprintf("grc.store target %s/%s is verified by GitHub OIDC and its latest result was signed by %s from %s", namespace, id, latest.Signer.WorkflowRef, repository), gemara.High
 }
 
-// LatestResultHasNoFailures requires the newest published OSPS Baseline
-// result to report no failed controls.
+// LatestResultHasNoFailures requires every control of the newest published
+// OSPS Baseline result that applies at the project's maturity level to have
+// been evaluated without a failure.
 func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	level, ok := maturityLevel(payload)
+	if !ok {
+		return gemara.NeedsReview, maturityLevelMissing, gemara.Low
+	}
 	target, namespace, id, result, message := loadTarget(payload)
 	if target == nil {
 		return result, message, gemara.High
@@ -136,29 +143,40 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 	if !ok {
 		return gemara.Failed, fmt.Sprintf("grc.store target %s/%s has no published OSPS Baseline evaluation", namespace, id), gemara.High
 	}
-	if latest.Counts.Failed == 0 {
-		return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports no failed controls", namespace, id, latest.LogVersion), gemara.High
+	entries, err := loadLog(payload, latest)
+	if err != nil {
+		return gemara.NeedsReview, fmt.Sprintf("Could not read the latest published log for %s/%s: %s; manual review needed", namespace, id, err), gemara.Low
 	}
-	message = fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports %d failed control(s)", namespace, id, latest.LogVersion, latest.Counts.Failed)
-	// The count alone decides the verdict; the log only names the controls.
-	if entries, err := loadLog(payload, latest); err == nil {
-		var failed []string
-		for _, entry := range entries {
-			if entry.Result == gemara.Failed.String() {
-				failed = append(failed, entry.Requirement.EntryID)
-			}
+	var failed, skipped []string
+	for _, entry := range entries {
+		if !appliesAt(entry, level) {
+			continue
 		}
-		if len(failed) > 0 {
-			message += ": " + strings.Join(failed, ", ")
+		switch {
+		case entry.Result == gemara.Failed.String() || entry.Result == gemara.Unknown.String():
+			failed = append(failed, entry.Requirement.EntryID)
+		case entry.Result == gemara.NotRun.String() && entry.StepsExecuted == 0:
+			skipped = append(skipped, entry.Requirement.EntryID)
 		}
 	}
-	return gemara.Failed, message, gemara.High
+	if len(failed) > 0 {
+		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports %d failed or unknown control(s) at maturity level %d: %s", namespace, id, latest.LogVersion, len(failed), level, strings.Join(failed, ", ")), gemara.High
+	}
+	if len(skipped) > 0 {
+		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) did not evaluate %d control(s) that apply at maturity level %d (%s); publish a scan at maturity level %d", namespace, id, latest.LogVersion, len(skipped), level, strings.Join(skipped, ", "), level), gemara.High
+	}
+	return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports no failed controls at maturity level %d", namespace, id, latest.LogVersion, level), gemara.High
 }
 
 // AIReviewUncheckedControlEvidence asks the model whether the documentation
-// linked from Security Insights covers the controls the latest published
-// result could not check (Needs Review and Not Run).
+// linked from Security Insights covers the controls at the project's maturity
+// level that the latest published result could not check (Needs Review and
+// Not Run).
 func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	level, ok := maturityLevel(payload)
+	if !ok {
+		return gemara.NeedsReview, maturityLevelMissing, gemara.Low
+	}
 	target, namespace, id, result, message := loadTarget(payload)
 	if target == nil {
 		return result, message, gemara.High
@@ -173,20 +191,19 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 	}
 	var unchecked []uncheckedControl
 	for _, entry := range entries {
-		if entry.Result != gemara.NeedsReview.String() && entry.Result != gemara.NotRun.String() {
+		if !appliesAt(entry, level) || (entry.Result != gemara.NeedsReview.String() && entry.Result != gemara.NotRun.String()) {
 			continue
 		}
 		unchecked = append(unchecked, uncheckedControl{
 			ID:             entry.Requirement.EntryID,
 			Result:         entry.Result,
 			Applicability:  entry.Applicability,
-			Executed:       entry.StepsExecuted > 0,
 			Message:        entry.Message,
 			Recommendation: entry.Recommendation,
 		})
 	}
 	if len(unchecked) == 0 {
-		return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls", namespace, id, latest.LogVersion), gemara.High
+		return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d", namespace, id, latest.LogVersion, level), gemara.High
 	}
 
 	targetPage := fmt.Sprintf("https://grc.store/targets/%s/%s", namespace, id)
@@ -198,6 +215,7 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 			Catalog:    latest.CatalogID,
 			Counts:     latest.Counts,
 		},
+		MaturityLevel:     level,
 		UncheckedControls: unchecked,
 		Collection:        evidenceCollection{Complete: true, Scope: evidenceCollectionScope},
 	}
@@ -232,10 +250,11 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 	return reusable_steps.AIReview(payload, "defender-unchecked-control-evidence", string(material), sources)
 }
 
-const evidenceCollectionScope = "The unchecked controls are every Needs Review and Not Run entry in the latest evaluation log published to grc.store. This plugin does not know the project's maturity level: each control's applicability is copied from the published log, and executed is false where the publishing scan skipped the control because its applicability is outside the levels that scan ran for. Documentation is the documentation, vulnerability policy and assessment evidence URLs declared in Security Insights, each fetched once with HTML reduced to text and content capped; links inside those documents were not followed. Complete means every declared URL was retrieved, not that the project's documentation is exhaustive."
+const evidenceCollectionScope = "The unchecked controls are every Needs Review and Not Run entry in the latest evaluation log published to grc.store whose applicability includes the project's maturity level, which the reviewer supplied as maturity_level. Documentation is the documentation, vulnerability policy and assessment evidence URLs declared in Security Insights, each fetched once with HTML reduced to text and content capped; links inside those documents were not followed. Complete means every declared URL was retrieved, not that the project's documentation is exhaustive."
 
 type uncheckedControlEvidence struct {
 	PublishedResult   publishedResult    `json:"published_result"`
+	MaturityLevel     int                `json:"maturity_level"`
 	UncheckedControls []uncheckedControl `json:"unchecked_controls"`
 	Documentation     []evidenceDocument `json:"documentation"`
 	Collection        evidenceCollection `json:"collection"`
@@ -253,7 +272,6 @@ type uncheckedControl struct {
 	ID             string   `json:"id"`
 	Result         string   `json:"result"`
 	Applicability  []string `json:"applicability"`
-	Executed       bool     `json:"executed"`
 	Message        string   `json:"message,omitempty"`
 	Recommendation string   `json:"recommendation,omitempty"`
 }
@@ -303,6 +321,32 @@ func loadLog(payload data.Payload, evaluation data.GrcStoreEvaluation) ([]assess
 		entries = append(entries, evaluation.AssessmentLogs...)
 	}
 	return entries, nil
+}
+
+const maturityLevelMissing = "Set the maturity_level var (1-3) to the project's OSPS Baseline maturity level"
+
+// maturityLevel reads the maturity_level var as an int or a numeric string.
+func maturityLevel(payload data.Payload) (int, bool) {
+	if payload.Config == nil {
+		return 0, false
+	}
+	value, _ := payload.Config.GetVar("maturity_level")
+	var level int
+	switch v := value.(type) {
+	case int:
+		level = v
+	case float64:
+		level = int(v)
+	case string:
+		level, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	return level, level >= 1 && level <= 3
+}
+
+// appliesAt reports whether a log entry belongs to the level. The catalog
+// lists every level a control applies at, so a Level 1 control lists all three.
+func appliesAt(entry assessmentLogEntry, level int) bool {
+	return slices.Contains(entry.Applicability, fmt.Sprintf("maturity-%d", level))
 }
 
 // declaredTarget finds the first Security Insights tool result location of

@@ -158,17 +158,40 @@ func scannerWorkflows(payload data.Payload) ([]scannerWorkflow, gemara.Result, s
 	if err != nil {
 		return nil, gemara.NeedsReview, fmt.Sprintf("Could not read workflows on the default branch: %s", err)
 	}
-	var found []scannerWorkflow
+	var parsed []data.WorkflowFile
 	var unparsed []string
+	workflows := map[string]workflowFile{}
+	scanner := map[string]bool{}
 	for _, file := range files {
 		var wf workflowFile
 		if err := yaml.Unmarshal(file.Content, &wf); err != nil {
 			unparsed = append(unparsed, file.Path)
 			continue
 		}
-		if runsScanner(wf) {
-			found = append(found, scannerWorkflow{path: file.Path, triggers: triggers(wf.On)})
+		parsed = append(parsed, file)
+		workflows[file.Path] = wf
+		scanner[file.Path] = runsScanner(wf)
+	}
+	// A workflow that calls a local scanner workflow runs the scanner too.
+	for changed := true; changed; {
+		changed = false
+		for path, wf := range workflows {
+			if !scanner[path] && slices.ContainsFunc(localCalls(wf), func(called string) bool { return scanner[called] }) {
+				scanner[path], changed = true, true
+			}
 		}
+	}
+	var found []scannerWorkflow
+	for _, file := range parsed {
+		if !scanner[file.Path] {
+			continue
+		}
+		on := triggers(workflows[file.Path].On)
+		// A workflow_call-only workflow is judged by its callers' triggers.
+		if slices.Equal(on, []string{"workflow_call"}) && hasCaller(workflows, file.Path) {
+			continue
+		}
+		found = append(found, scannerWorkflow{path: file.Path, triggers: on})
 	}
 	if len(found) > 0 {
 		return found, gemara.Passed, ""
@@ -177,6 +200,27 @@ func scannerWorkflows(payload data.Payload) ([]scannerWorkflow, gemara.Result, s
 		return nil, gemara.NeedsReview, "No OSPS Baseline scanner workflow found, but these workflows could not be parsed: " + strings.Join(unparsed, ", ")
 	}
 	return nil, gemara.Failed, "No workflow on the default branch runs the OSPS Baseline scanner (osps-baseline-action or pvtr-publish-results)"
+}
+
+// localCalls lists the repository workflows the jobs call with a local
+// `uses: ./.github/workflows/x.yml`.
+func localCalls(wf workflowFile) []string {
+	var called []string
+	for _, job := range wf.Jobs {
+		if path, ok := strings.CutPrefix(job.Uses, "./"); ok {
+			called = append(called, path)
+		}
+	}
+	return called
+}
+
+func hasCaller(workflows map[string]workflowFile, path string) bool {
+	for _, wf := range workflows {
+		if slices.Contains(localCalls(wf), path) {
+			return true
+		}
+	}
+	return false
 }
 
 func runsScanner(wf workflowFile) bool {

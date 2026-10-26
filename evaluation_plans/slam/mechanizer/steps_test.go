@@ -144,6 +144,36 @@ func Test_ScannerWorkflows(t *testing.T) {
 			wantPRTMsg:    "OSPS Baseline scanner workflows do not trigger on pull_request_target: .github/workflows/osps-baseline.yml",
 		},
 		{
+			name: "scheduled caller of a local workflow_call scanner workflow",
+			files: []data.WorkflowFile{
+				wf(".github/workflows/ci.yml", "on:\n  schedule:\n    - cron: '0 0 * * 0'\njobs:\n  baseline:\n    uses: ./.github/workflows/baseline.yml\n"),
+				wf(".github/workflows/baseline.yml", "on: workflow_call"+actionJob),
+			},
+			wantRecurring: gemara.Passed,
+			wantRecMsg:    "OSPS Baseline scanner workflow .github/workflows/ci.yml runs on schedule",
+			wantPRT:       gemara.Passed,
+			wantPRTMsg:    "OSPS Baseline scanner workflows do not trigger on pull_request_target: .github/workflows/ci.yml",
+		},
+		{
+			name: "pull_request_target caller of a local scanner workflow",
+			files: []data.WorkflowFile{
+				wf("caller.yml", "on: [push, pull_request_target]\njobs:\n  b:\n    uses: ./called.yml\n"),
+				wf("called.yml", "on: workflow_call"+actionJob),
+			},
+			wantRecurring: gemara.Passed,
+			wantRecMsg:    "OSPS Baseline scanner workflow caller.yml runs on push",
+			wantPRT:       gemara.Failed,
+			wantPRTMsg:    "OSPS Baseline scanner workflow triggers on pull_request_target: caller.yml",
+		},
+		{
+			name:          "workflow_call only with no caller",
+			files:         []data.WorkflowFile{wf("a.yml", "on: workflow_call"+actionJob)},
+			wantRecurring: gemara.Failed,
+			wantRecMsg:    "OSPS Baseline scanner workflow does not run on a schedule, push, or release: a.yml (workflow_call)",
+			wantPRT:       gemara.Passed,
+			wantPRTMsg:    "OSPS Baseline scanner workflows do not trigger on pull_request_target: a.yml",
+		},
+		{
 			name:          "no scanner workflow",
 			files:         []data.WorkflowFile{unrelated},
 			wantRecurring: gemara.Failed,

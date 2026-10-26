@@ -2,15 +2,36 @@ package reusable_steps
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/eddie-knight/pvtr-security-slam-review/data"
 	"github.com/gemaraproj/go-gemara"
 	sdkai "github.com/privateerproj/privateer-sdk/ai"
+	"github.com/privateerproj/privateer-sdk/config"
 )
 
 // NewAIClient builds the configured AI client; tests replace it.
-var NewAIClient = sdkai.NewClient
+var NewAIClient = newAIClient
+
+// aiDefaults replace the SDK's 1024 tokens and 30s, which cut off a verdict
+// that cites every control or reads 128K characters of documentation.
+var aiDefaults = map[string]any{"ai_max_tokens": 4096, "ai_timeout": "120s"}
+
+// newAIClient fills in aiDefaults the user left unset, but only once a
+// provider is chosen, so an unconfigured run still reads as AI disabled.
+func newAIClient(c config.Config) (sdkai.Client, error) {
+	if c.GetString("ai_provider") != "" {
+		vars := maps.Clone(c.Vars)
+		for key, value := range aiDefaults {
+			if _, set := vars[key]; !set {
+				vars[key] = value
+			}
+		}
+		c.Vars = vars
+	}
+	return sdkai.NewClient(c)
+}
 
 func NotImplemented(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	return gemara.NotRun, "Not implemented", confidence
@@ -55,7 +76,8 @@ func AIReview(payload data.Payload, behavior string, material string, sources []
 		evidence.Description = "AI Assisted Review of " + strings.Join(sources, ", ")
 	}
 	payload.AddEvidence(evidence)
-	if response.GemaraResult() == gemara.NeedsReview {
+	// A low-confidence verdict means the model lacked evidence; it must not award or deny a badge.
+	if response.GemaraResult() == gemara.NeedsReview || response.GemaraConfidence() == gemara.Low {
 		return gemara.NeedsReview, response.Summary(), gemara.Low
 	}
 	return response.GemaraResult(), response.Summary(), response.GemaraConfidence()
