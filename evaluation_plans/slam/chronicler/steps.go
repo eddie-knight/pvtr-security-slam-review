@@ -194,6 +194,7 @@ type document struct {
 	Content     string    `json:"content,omitempty"`
 	Truncated   bool      `json:"content_truncated,omitempty"`
 	FromSection bool      `json:"content_starts_at_section,omitempty"`
+	SameAs      string    `json:"same_content_as,omitempty"`
 	NotIncluded string    `json:"not_included,omitempty"`
 }
 
@@ -207,7 +208,7 @@ type documentationMaterial struct {
 	Collection collection `json:"collection"`
 }
 
-const collectionScope = "Each documentation URL declared in the Security Insights file, fetched once without credentials (github.com blob URLs as raw file content). HTML is reduced to text. Links were followed one hop only from declared documents shorter than 2048 characters, at most 3 per document; those pages carry linked_from instead of declared_for. No other repository files were read. Each document's content is capped at 65536 characters and all content together at 262144 characters; content_truncated marks a document cut at its cap, and not_included marks one left out at the total cap. A section names the URL fragment the declaration points at; the content is the whole document, except that a document over its cap starts at the Markdown heading matching the section when one is found (content_starts_at_section)."
+const collectionScope = "Each documentation URL declared in the Security Insights file, fetched once without credentials (github.com blob URLs as raw file content). HTML is reduced to text. Links were followed one hop only from declared documents shorter than 2048 characters, at most 3 per document; those pages carry linked_from instead of declared_for. No other repository files were read. Each document's content is capped at 65536 characters and all content together at 262144 characters; content_truncated marks a document cut at its cap, and not_included marks one left out at the total cap. same_content_as marks a URL that differs from an earlier entry only by its fragment, whose whole content that entry already carries. A section names the URL fragment the declaration points at; the content is the whole document, except that a document over its cap starts at the Markdown heading matching the section when one is found (content_starts_at_section)."
 
 func AIReviewDocumentation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	material, sources, incomplete := documentationEvidence(payload)
@@ -236,8 +237,15 @@ func documentationEvidence(payload data.Payload) (string, []string, []string) {
 
 	total := 0
 	bodies := map[string]string{}
+	whole := map[string]string{} // URL without fragment -> entry that carries it whole
 	for i := range packet.Documents {
 		doc := &packet.Documents[i]
+		page, _, _ := strings.Cut(doc.SourceURL, "#")
+		// Another fragment of a page already sent whole is not sent again.
+		if first, ok := whole[page]; ok {
+			doc.SameAs = first
+			continue
+		}
 		if isTemplated(doc.SourceURL) {
 			packet.Collection.NotRetrieved = append(packet.Collection.NotRetrieved, doc.SourceURL+": URL contains a placeholder")
 			continue
@@ -270,6 +278,9 @@ func documentationEvidence(payload data.Payload) (string, []string, []string) {
 		}
 		doc.Content = text
 		total += len(text)
+		if !doc.Truncated {
+			whole[page] = doc.SourceURL
+		}
 	}
 	// Declared documents keep the budget first; then follow short ones' links.
 	for i, declared := 0, len(packet.Documents); i < declared; i++ {

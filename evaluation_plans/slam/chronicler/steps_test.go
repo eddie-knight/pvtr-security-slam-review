@@ -262,6 +262,36 @@ func TestLongDocumentSentWhole(t *testing.T) {
 	}
 }
 
+// Fragments of one page (README.md#a, README.md#b) send its content once.
+func TestFragmentsOfOnePageSentOnce(t *testing.T) {
+	stubFetch(t, func(url string) (data.FetchedURL, error) {
+		return data.FetchedURL{URL: url, StatusCode: 200, Body: []byte("# Guide\n## Contributing\nOpen a pull request.\n## Dependencies\nPinned.\n")}, nil
+	})
+	payload := newPayload()
+	docs := payload.Insights.Repository.Documentation
+	docs.ContributingGuide = ptrTo(si.URL("https://example.org/README.md#contributing"))
+	docs.DependencyManagementPolicy = ptrTo(si.URL("https://example.org/README.md#dependencies"))
+
+	material, _, _ := documentationEvidence(payload)
+
+	var packet documentationMaterial
+	if err := json.Unmarshal([]byte(material), &packet); err != nil {
+		t.Fatal(err)
+	}
+	var first, second *document
+	for i := range packet.Documents {
+		switch packet.Documents[i].SourceURL {
+		case "https://example.org/README.md#contributing":
+			first = &packet.Documents[i]
+		case "https://example.org/README.md#dependencies":
+			second = &packet.Documents[i]
+		}
+	}
+	if first == nil || second == nil || first.Content == "" || second.Content != "" || second.SameAs != first.SourceURL || second.Section != "dependencies" {
+		t.Errorf("first %+v, second %+v", first, second)
+	}
+}
+
 func TestLongDocumentStartsAtSection(t *testing.T) {
 	body := "# Guide\n" + strings.Repeat("filler\n", maxDocumentChars) + "## Contributing!\nOpen a pull request.\n"
 	stubFetch(t, func(url string) (data.FetchedURL, error) {
