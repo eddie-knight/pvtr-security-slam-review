@@ -20,6 +20,7 @@ services:
       repo: <github repo name>
       token: <github token with public repo read access>
       maturity_level: 1 # the project's OSPS Baseline maturity level (1-3); Chronicler and Defender check controls at this level
+      grc_store_target: <namespace>/<target> # Defender: the grc.store target the project publishes to
       # Optional: the AI review steps. Without these, AI steps return Needs Review.
       ai_provider: anthropic
       ai_model: claude-sonnet-5-5

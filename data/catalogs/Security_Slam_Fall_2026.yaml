@@ -87,13 +87,11 @@ controls:
         id: SLAM-DE-01.01
         recommendation: |
           Publish results with the pvtr-publish-results workflow from the default
-          branch and point the OSPS Baseline tool's results location in Security
-          Insights at the grc.store target page.
+          branch to the project's grc.store target.
         state: Active
         text: |
-          A grc.store target declared in Security Insights MUST have recurring
-          OSPS Baseline results published by a trusted publisher bound to this
-          repository.
+          The project's grc.store target MUST have recurring OSPS Baseline
+          results published by a trusted publisher bound to this repository.
       - applicability:
           - defender
         id: SLAM-DE-01.02

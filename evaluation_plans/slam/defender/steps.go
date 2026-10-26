@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
-	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -42,14 +41,14 @@ var (
 	now                    = time.Now
 )
 
-// GrcStoreTargetDeclared requires a Security Insights tool whose results
-// location is a grc.store target page: the Defender is judged from there.
+// GrcStoreTargetDeclared requires the reviewer to name the project's grc.store
+// target: the Defender is judged from there.
 func GrcStoreTargetDeclared(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	namespace, id, ok := declaredTarget(payload)
 	if !ok {
-		return gemara.Failed, "No grc.store target page found in repository.security.tools results; the Defender badge requires the grc.store publish workflow, so list its target page (https://grc.store/targets/<namespace>/<target>) under repository.security.tools", gemara.High
+		return gemara.NeedsReview, grcStoreTargetMissing, gemara.Low
 	}
-	return gemara.Passed, fmt.Sprintf("Security Insights declares grc.store target %s/%s", namespace, id), gemara.High
+	return gemara.Passed, fmt.Sprintf("Reviewing grc.store target %s/%s", namespace, id), gemara.High
 }
 
 // ResultPublished requires the declared target to exist on grc.store with an
@@ -71,7 +70,7 @@ func ResultPublished(payload data.Payload) (result gemara.Result, message string
 func ResultIsRecurring(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	namespace, id, ok := declaredTarget(payload)
 	if !ok {
-		return gemara.Failed, "No grc.store target page found in repository.security.tools results", gemara.High
+		return gemara.NeedsReview, grcStoreTargetMissing, gemara.Low
 	}
 	evaluations, err := getGrcStoreEvaluations(&payload, namespace, id, recentEvaluations)
 	if err != nil {
@@ -328,32 +327,20 @@ func appliesAt(entry assessmentLogEntry, level int) bool {
 	return slices.Contains(entry.Applicability, fmt.Sprintf("maturity-%d", level))
 }
 
-// declaredTarget finds the first Security Insights tool result location of
-// the form https://grc.store/targets/{namespace}/{id}.
-func declaredTarget(payload data.Payload) (namespace, id string, ok bool) {
-	for _, tool := range payload.Insights.Repository.SecurityPosture.Tools {
-		for _, attestation := range []*si.Attestation{tool.Results.CI, tool.Results.Release, tool.Results.Adhoc} {
-			if attestation == nil {
-				continue
-			}
-			if namespace, id, ok = parseTargetPage(string(attestation.Location)); ok {
-				return namespace, id, true
-			}
-		}
-	}
-	return "", "", false
-}
+// grcStoreTargetMissing is the message for steps that need grc_store_target.
+const grcStoreTargetMissing = "Set the grc_store_target var to the project's grc.store target as <namespace>/<target>, the target the pvtr-publish-results workflow publishes to"
 
-func parseTargetPage(location string) (namespace, id string, ok bool) {
-	u, err := url.Parse(strings.TrimSpace(location))
-	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Host, "grc.store") {
+// declaredTarget reads the grc_store_target var, <namespace>/<target>. The
+// reviewer sets it because projects are not asked to record it anywhere.
+func declaredTarget(payload data.Payload) (namespace, id string, ok bool) {
+	if payload.Config == nil {
 		return "", "", false
 	}
-	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) != 3 || parts[0] != "targets" || parts[1] == "" || parts[2] == "" {
+	namespace, id, ok = strings.Cut(strings.TrimSpace(payload.Config.GetString("grc_store_target")), "/")
+	if !ok || namespace == "" || id == "" || strings.Contains(id, "/") {
 		return "", "", false
 	}
-	return parts[1], parts[2], true
+	return namespace, id, true
 }
 
 // loadTarget fetches the declared target. A nil target comes with the
@@ -361,7 +348,7 @@ func parseTargetPage(location string) (namespace, id string, ok bool) {
 func loadTarget(payload data.Payload) (target *data.GrcStoreTarget, namespace, id string, result gemara.Result, message string) {
 	namespace, id, ok := declaredTarget(payload)
 	if !ok {
-		return nil, "", "", gemara.Failed, "No grc.store target page found in repository.security.tools results"
+		return nil, "", "", gemara.NeedsReview, grcStoreTargetMissing
 	}
 	target, err := getGrcStoreTarget(&payload, namespace, id)
 	if err != nil {

@@ -17,7 +17,10 @@ import (
 	sdkconfig "github.com/privateerproj/privateer-sdk/config"
 )
 
-const strimziPage = "https://grc.store/targets/strimzi/strimzi-kafka-operator"
+const (
+	strimziTarget = "strimzi/strimzi-kafka-operator"
+	strimziPage   = "https://grc.store/targets/" + strimziTarget
+)
 
 // hub is a stubbed grc.store. The Strimzi fixtures are real responses from
 // 2026-10-25: one target version, a recurring signed scan, one failed control.
@@ -96,19 +99,12 @@ func strimziPayload(t *testing.T) data.Payload {
 		Owner: "strimzi", Repo: "strimzi-kafka-operator",
 		InsightsPath: "security-insights.yml", Insights: *insights,
 		Evidence: &gemara.EvidenceCollector{},
-		Config:   &sdkconfig.Config{Vars: map[string]any{"maturity_level": 2}},
+		Config:   &sdkconfig.Config{Vars: map[string]any{"maturity_level": 2, "grc_store_target": strimziTarget}},
 	}
 }
 
-func payloadWithLocation(location string) data.Payload {
-	return data.Payload{Insights: si.SecurityInsights{Repository: &si.Repository{
-		SecurityPosture: si.SecurityPosture{Tools: []si.SecurityTool{{
-			Name: "OSPS Baseline Scanner",
-			Results: si.SecurityToolResults{Release: &si.Attestation{
-				Location: si.URL(location),
-			}},
-		}}},
-	}}}
+func payloadWithTarget(target string) data.Payload {
+	return data.Payload{Config: &sdkconfig.Config{Vars: map[string]any{"grc_store_target": target}}}
 }
 
 type step func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel)
@@ -137,27 +133,27 @@ func Test_Strimzi(t *testing.T) {
 
 func Test_GrcStoreTargetDeclared(t *testing.T) {
 	tests := []struct {
-		name     string
-		location string
-		want     gemara.Result
+		name   string
+		target string
+		want   gemara.Result
 	}{
-		{"target page", strimziPage, gemara.Passed},
-		{"trailing slash", strimziPage + "/", gemara.Passed},
-		{"workflow page", "https://github.com/strimzi/strimzi-kafka-operator/actions/workflows/baseline.yml", gemara.Failed},
-		{"namespace page", "https://grc.store/strimzi", gemara.Failed},
-		{"http", "http://grc.store/targets/strimzi/strimzi-kafka-operator", gemara.Failed},
-		{"lookalike host", "https://grc.store.example.com/targets/a/b", gemara.Failed},
-		{"empty", "", gemara.Failed},
+		{"target", strimziTarget, gemara.Passed},
+		{"padded", " " + strimziTarget + " ", gemara.Passed},
+		{"namespace only", "strimzi", gemara.NeedsReview},
+		{"empty id", "strimzi/", gemara.NeedsReview},
+		{"empty namespace", "/strimzi-kafka-operator", gemara.NeedsReview},
+		{"target page URL", strimziPage, gemara.NeedsReview},
+		{"empty", "", gemara.NeedsReview},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if result, message, _ := GrcStoreTargetDeclared(payloadWithLocation(tt.location)); result != tt.want {
+			if result, message, _ := GrcStoreTargetDeclared(payloadWithTarget(tt.target)); result != tt.want {
 				t.Errorf("got %v (%s), want %v", result, message, tt.want)
 			}
 		})
 	}
-	if result, _, _ := GrcStoreTargetDeclared(data.Payload{Insights: si.SecurityInsights{Repository: &si.Repository{}}}); result != gemara.Failed {
-		t.Errorf("no tools: got %v, want Failed", result)
+	if result, _, _ := GrcStoreTargetDeclared(data.Payload{}); result != gemara.NeedsReview {
+		t.Errorf("no config: got %v, want NeedsReview", result)
 	}
 }
 
@@ -178,7 +174,7 @@ func Test_ResultPublished(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.hub.install(t)
-			if result, message, _ := ResultPublished(payloadWithLocation(strimziPage)); result != tt.want {
+			if result, message, _ := ResultPublished(payloadWithTarget(strimziTarget)); result != tt.want {
 				t.Errorf("got %v (%s), want %v", result, message, tt.want)
 			}
 		})
@@ -205,7 +201,7 @@ func Test_ResultIsRecurring(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.hub.install(t)
-			if result, message, _ := ResultIsRecurring(payloadWithLocation(strimziPage)); result != tt.want {
+			if result, message, _ := ResultIsRecurring(payloadWithTarget(strimziTarget)); result != tt.want {
 				t.Errorf("got %v (%s), want %v", result, message, tt.want)
 			}
 		})
@@ -282,7 +278,7 @@ func Test_LatestResultHasNoFailures(t *testing.T) {
 			h.log, h.logErr = tt.log, tt.logErr
 			h.install(t)
 			payload := strimziPayload(t)
-			payload.Config.Vars = map[string]any{}
+			payload.Config.Vars = map[string]any{"grc_store_target": strimziTarget}
 			if tt.level != nil {
 				payload.Config.Vars["maturity_level"] = tt.level
 			}
@@ -409,7 +405,7 @@ func Test_AIReviewUncheckedControlEvidence_NoMaturityLevel(t *testing.T) {
 	client := &fakeAIClient{}
 	stubAIClient(t, client)
 	payload := strimziPayload(t)
-	payload.Config.Vars = map[string]any{}
+	payload.Config.Vars = map[string]any{"grc_store_target": strimziTarget}
 	if result, message, _ := AIReviewUncheckedControlEvidence(payload); result != gemara.NeedsReview || !strings.Contains(message, "maturity_level") || client.calls != 0 {
 		t.Errorf("got %v %q with %d AI calls, want NeedsReview without AI", result, message, client.calls)
 	}
