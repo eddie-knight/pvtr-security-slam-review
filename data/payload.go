@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	pathpkg "path"
 	"slices"
 	"strconv"
@@ -38,12 +39,15 @@ type Payload struct {
 	// Commit is the default branch's head when the run started. Repository
 	// files are read at it, so every step sees the same tree.
 	Commit string
-	// RootEntries are the names of the files and directories at the root of
-	// the default branch, with their original case.
-	RootEntries []string
+	// RootEntries and GitHubDirEntries are the names of the files and
+	// directories at the root and in .github/ of the default branch, with
+	// their original case: the two places a Security Insights file may live.
+	RootEntries      []string
+	GitHubDirEntries []string
 
-	// Insights is the parsed Security Insights file. InsightsPath is where it
-	// was found ("" when there is none); InsightsRaw is its exact bytes.
+	// Insights is the parsed Security Insights file. InsightsPath is where
+	// si-tooling's discovery found it ("" when there is none); InsightsRaw is
+	// its exact bytes.
 	// InsightsError is set when the file exists but si-tooling rejected it.
 	Insights      si.SecurityInsights
 	InsightsPath  string
@@ -190,6 +194,10 @@ func (p Payload) ClearEvidence() {
 	}
 }
 
+// discoverInsights is si-tooling's lookup of the Security Insights file; a
+// test hook.
+var discoverInsights = si.Discover
+
 // Loader builds the Payload: repository metadata, root listing, and the
 // Security Insights file. Everything else is fetched lazily by the methods.
 // A target that cannot load is logged as an error, so its log never reads as
@@ -307,13 +315,33 @@ func (p *Payload) load() error {
 	for _, entry := range root {
 		p.RootEntries = append(p.RootEntries, entry.GetName())
 	}
+	_, dotGitHub, _, err := p.ghClient.Repositories.GetContents(ctx, p.Owner, p.Repo, ".github",
+		&github.RepositoryContentGetOptions{Ref: p.ref()})
+	if err != nil && !isNotFound(err) {
+		return fmt.Errorf("failed to list .github: %w", err)
+	}
+	for _, entry := range dotGitHub {
+		p.GitHubDirEntries = append(p.GitHubDirEntries, entry.GetName())
+	}
 
-	p.loadSecurityInsights()
-	return nil
+	return p.loadSecurityInsights(ctx)
 }
 
-func (p *Payload) loadSecurityInsights() {
-	p.InsightsPath = findSecurityInsightsFile(p.RootEntries)
+// loadSecurityInsights finds the file with si-tooling, which reads only
+// GITHUB_TOKEN from the environment, so the run's token is lent to it.
+// shortcut: si.Discover reads the default branch, not p.Commit; the file is then read at p.Commit, so a push between the two can only surface as a read error.
+func (p *Payload) loadSecurityInsights(ctx context.Context) error {
+	if p.Config != nil && p.Config.GetString("token") != "" && os.Getenv("GITHUB_TOKEN") == "" {
+		token := p.Config.GetString("token")
+		if err := os.Setenv("GITHUB_TOKEN", token); err != nil {
+			return err
+		}
+	}
+	path, err := discoverInsights(ctx, p.Owner, p.Repo)
+	if err != nil && !errors.Is(err, si.ErrNotFound) {
+		return fmt.Errorf("failed to look for the Security Insights file: %w", err)
+	}
+	p.InsightsPath = path
 	if p.InsightsPath != "" {
 		raw, err := p.GetFileContent(p.InsightsPath)
 		if err == nil {
@@ -329,27 +357,7 @@ func (p *Payload) loadSecurityInsights() {
 		}
 	}
 	p.ensureInsightsInitialized()
-}
-
-// findSecurityInsightsFile matches root entries against the spec's filenames
-// case-insensitively, so a misnamed file is still loaded (a separate step
-// reports the name). Exact case wins, then the order of
-// si.SecurityInsightsFilenames (.yml before .yaml).
-func findSecurityInsightsFile(entries []string) string {
-	names := si.SecurityInsightsFilenames()
-	for _, name := range names {
-		if slices.Contains(entries, name) {
-			return name
-		}
-	}
-	for _, name := range names {
-		for _, entry := range entries {
-			if strings.EqualFold(entry, name) {
-				return entry
-			}
-		}
-	}
-	return ""
+	return nil
 }
 
 // ensureInsightsInitialized fills nil pointers so steps can read nested

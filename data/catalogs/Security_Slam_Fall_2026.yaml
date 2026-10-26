@@ -4,14 +4,16 @@ controls:
           - cleaner
         id: SLAM-CL-01.01
         recommendation: |
-          Publish security-insights.yml at the root of the repository. Build it
+          Publish security-insights.yml at the root of the repository or in
+          .github/, and only one file per location. Build it
           with the Security Insights Editor (https://security-insights.openssf.org/editor/)
           and keep it valid with the Security Insights Action.
         state: Active
         text: |
-          The repository MUST have a lowercase security-insights.yml file at its
-          root that validates against the current Security Insights schema and
-          contains every field the specification marks as required.
+          The repository MUST have one Security Insights file that si-tooling
+          finds (security-insights.yml or security-insights.yaml, at the root or
+          in .github/) that validates against the current Security Insights
+          schema and contains every field the specification marks as required.
     group: CL
     id: SLAM-CL-01
     objective: |

@@ -3,6 +3,7 @@ package cleaner
 import (
 	_ "embed"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 
@@ -16,24 +17,37 @@ import (
 	"github.com/ossf/si-tooling/v2/si"
 )
 
-const requiredFileName = "security-insights.yml"
+// insightsNames are the file names si-tooling's discovery accepts, as
+// si.Discover lists them (unexported there): the spec's two, then legacy
+// spellings it still finds.
+var insightsNames = append(si.SecurityInsightsFilenames(), "SECURITY-INSIGHTS.yml", "SECURITY_INSIGHTS.yml", "security_insights.yml")
 
-func FileNamedSecurityInsightsYml(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	var found []string
-	for _, entry := range payload.RootEntries {
-		if slices.ContainsFunc(si.SecurityInsightsFilenames(), func(name string) bool { return strings.EqualFold(entry, name) }) {
-			found = append(found, entry)
+// SecurityInsightsFileFound takes the file si-tooling discovers, at the root
+// or in .github/, under any name it accepts. Two Security Insights files in
+// one location are an error, because readers may pick different ones.
+func SecurityInsightsFileFound(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	for _, location := range []struct {
+		dir     string
+		entries []string
+	}{{"the repository root", payload.RootEntries}, {".github/", payload.GitHubDirEntries}} {
+		var found []string
+		for _, entry := range location.entries {
+			if slices.Contains(insightsNames, entry) {
+				found = append(found, entry)
+			}
+		}
+		if len(found) > 1 {
+			return gemara.Failed, fmt.Sprintf("Found %d Security Insights files in %s (%s); keep only one", len(found), location.dir, strings.Join(found, ", ")), gemara.High
 		}
 	}
-	switch {
-	case len(found) > 1:
-		return gemara.Failed, fmt.Sprintf("Found %d Security Insights files at the repository root (%s); keep only %s", len(found), strings.Join(found, ", "), requiredFileName), gemara.High
-	case slices.Contains(found, requiredFileName):
-		return gemara.Passed, "Security Insights file is named " + requiredFileName, gemara.High
-	case len(found) == 1:
-		return gemara.Failed, fmt.Sprintf("Security Insights file is named %s; the badge requires the lowercase name %s", found[0], requiredFileName), gemara.High
+	if payload.InsightsPath == "" {
+		return gemara.Failed, "si-tooling found no Security Insights file (security-insights.yml or security-insights.yaml, at the root or in .github/)", gemara.High
 	}
-	return gemara.Failed, "No " + requiredFileName + " found at the repository root", gemara.High
+	message = "si-tooling found the Security Insights file at " + payload.InsightsPath
+	if !slices.Contains(si.SecurityInsightsFilenames(), path.Base(payload.InsightsPath)) {
+		message += "; the spec names security-insights.yml or .yaml, and si-tooling accepts this name as a legacy spelling"
+	}
+	return gemara.Passed, message, gemara.High
 }
 
 func ValidatesWithSITooling(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
@@ -41,7 +55,7 @@ func ValidatesWithSITooling(payload data.Payload) (result gemara.Result, message
 		return gemara.Failed, fmt.Sprintf("Security Insights file does not validate with si-tooling: %s", payload.InsightsError), gemara.High
 	}
 	if payload.InsightsPath == "" {
-		return gemara.Failed, "No Security Insights file found at the repository root", gemara.High
+		return gemara.Failed, "si-tooling found no Security Insights file at the repository root or in .github/", gemara.High
 	}
 	return gemara.Passed, "Security Insights file validates with si-tooling: " + payload.InsightsPath, gemara.High
 }

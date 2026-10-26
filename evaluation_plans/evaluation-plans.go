@@ -17,7 +17,7 @@ var (
 	// runs once the evidence exists and is in the right shape.
 	Slam = map[string][]TypedStep{
 		"SLAM-CL-01.01": {
-			cleaner.FileNamedSecurityInsightsYml,
+			cleaner.SecurityInsightsFileFound,
 			cleaner.ValidatesWithSITooling,
 			cleaner.RequiredFieldsPresent,
 			cleaner.ValidatesAgainstSchema,

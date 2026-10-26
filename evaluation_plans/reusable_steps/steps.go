@@ -41,7 +41,7 @@ func NotImplemented(payload data.Payload) (result gemara.Result, message string,
 // Security Insights file: every badge's evidence is linked from it.
 func HasSecurityInsightsFile(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	if payload.InsightsPath == "" {
-		return gemara.Failed, "No Security Insights file found at the repository root", gemara.High
+		return gemara.Failed, "si-tooling found no Security Insights file at the repository root or in .github/", gemara.High
 	}
 	if payload.InsightsError != nil {
 		return gemara.Failed, fmt.Sprintf("Security Insights file %s could not be parsed: %s", payload.InsightsPath, payload.InsightsError), gemara.High

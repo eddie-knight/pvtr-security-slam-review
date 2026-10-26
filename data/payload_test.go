@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	pathpkg "path"
 	"strings"
 	"testing"
 
@@ -13,14 +14,17 @@ import (
 	"github.com/privateerproj/privateer-sdk/config"
 )
 
-// fakeGitHub serves the contents API from files (path -> content). Paths
-// under .github/workflows/ are also listed as that directory.
+// fakeGitHub serves the contents API from files (path -> content). The root
+// and .github/ list their files, and paths under .github/workflows/ are also
+// listed as that directory. si-tooling's discovery is pointed at it too.
 func fakeGitHub(t *testing.T, files map[string]string) *github.Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path, ok := strings.CutPrefix(r.URL.Path, "/repos/o/r/contents/")
-		// Files are only served at the head commit, as the plugin reads them.
-		if ok && r.URL.Query().Get("ref") != headSHA {
+		listing := path == "" || path == ".github"
+		// Files are only served at the head commit, as the plugin reads them;
+		// si-tooling lists the two directories without a ref.
+		if ok && r.URL.Query().Get("ref") != headSHA && (!listing || r.URL.Query().Has("ref")) {
 			http.Error(w, "wrong ref "+r.URL.Query().Get("ref"), http.StatusBadRequest)
 			return
 		}
@@ -29,12 +33,16 @@ func fakeGitHub(t *testing.T, files map[string]string) *github.Client {
 			_, _ = fmt.Fprint(w, `{"default_branch":"main"}`)
 		case r.URL.Path == "/repos/o/r/branches/main":
 			_, _ = fmt.Fprintf(w, `{"name":"main","commit":{"sha":%q}}`, headSHA)
-		case ok && path == "":
+		case ok && listing:
 			var entries []string
 			for name := range files {
-				if !strings.Contains(name, "/") {
-					entries = append(entries, fmt.Sprintf(`{"type":"file","name":%q,"path":%q}`, name, name))
+				if dir, file := pathpkg.Split(name); strings.TrimSuffix(dir, "/") == path {
+					entries = append(entries, fmt.Sprintf(`{"type":"file","name":%q,"path":%q}`, file, name))
 				}
+			}
+			if path != "" && entries == nil {
+				http.NotFound(w, r)
+				return
 			}
 			_, _ = fmt.Fprintf(w, "[%s]", strings.Join(entries, ","))
 		case ok && path == ".github/workflows":
@@ -57,6 +65,8 @@ func fakeGitHub(t *testing.T, files map[string]string) *github.Client {
 		}
 	}))
 	t.Cleanup(server.Close)
+	t.Setenv("GITHUB_API_URL", server.URL)
+	t.Setenv("GITHUB_TOKEN", "")
 	client := github.NewClient(nil)
 	client.BaseURL, _ = url.Parse(server.URL + "/")
 	return client
@@ -95,18 +105,34 @@ func TestLoadInsightsParseError(t *testing.T) {
 	_ = p.Insights.Repository.ReleaseDetails
 }
 
-func TestFindSecurityInsightsFilePrecedence(t *testing.T) {
+// si-tooling's discovery decides where the file is: the spec's names at the
+// root or in .github/, .yml before .yaml, the root before .github/.
+func TestLoadDiscoversInsights(t *testing.T) {
 	for _, tc := range []struct {
-		entries []string
-		want    string
+		name  string
+		files map[string]string
+		want  string
 	}{
-		{[]string{"Security-Insights.yml", "security-insights.yaml"}, "security-insights.yaml"},
-		{[]string{"SECURITY-INSIGHTS.YAML", "Security-Insights.yml"}, "Security-Insights.yml"},
-		{[]string{"README.md"}, ""},
+		{"root yml", map[string]string{"security-insights.yml": validInsights}, "security-insights.yml"},
+		{"root yaml", map[string]string{"security-insights.yaml": validInsights}, "security-insights.yaml"},
+		{".github", map[string]string{".github/security-insights.yml": validInsights}, ".github/security-insights.yml"},
+		{"both extensions", map[string]string{"security-insights.yaml": validInsights, "security-insights.yml": validInsights}, "security-insights.yml"},
+		{"root before .github", map[string]string{".github/security-insights.yml": validInsights, "security-insights.yaml": validInsights}, "security-insights.yaml"},
+		{"none", map[string]string{"README.md": "hi"}, ""},
 	} {
-		if got := findSecurityInsightsFile(tc.entries); got != tc.want {
-			t.Errorf("%v: got %q, want %q", tc.entries, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			p := loadFake(t, tc.files)
+			if p.InsightsPath != tc.want || p.InsightsError != nil {
+				t.Fatalf("got path %q err %v, want %q", p.InsightsPath, p.InsightsError, tc.want)
+			}
+			if tc.want != "" && string(p.InsightsRaw) != validInsights {
+				t.Fatalf("raw = %q", p.InsightsRaw)
+			}
+		})
+	}
+	p := loadFake(t, map[string]string{".github/security-insights.yml": validInsights, "README.md": "hi"})
+	if strings.Join(p.GitHubDirEntries, ",") != "security-insights.yml" || strings.Join(p.RootEntries, ",") != "README.md" {
+		t.Fatalf("entries: root %v .github %v", p.RootEntries, p.GitHubDirEntries)
 	}
 }
 

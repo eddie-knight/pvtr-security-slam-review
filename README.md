@@ -10,7 +10,7 @@ quality, which only happens when the fixed checks did not fail.
 
 | Badge | Requirement | Deterministic | AI review |
 |---|---|---|---|
-| Cleaner | SLAM-CL-01.01 | lowercase `security-insights.yml` at the root, and only one; si-tooling strict load; spec-required fields present; validates against the spec's v2.2.0 CUE schema; `repository.url` is the reviewed repository | none |
+| Cleaner | SLAM-CL-01.01 | a Security Insights file found by si-tooling (`security-insights.yml` or `.yaml`, at the root or in `.github/`, plus the legacy names si-tooling accepts), and only one per location; si-tooling strict load; spec-required fields present; validates against the spec's v2.2.0 CUE schema; `repository.url` is the reviewed repository | none |
 | Chronicler | SLAM-CH-01.01 | Level 1 documentation links declared; every link resolves; the OSPS Baseline scanner's steps for the documentation-shaped DO, GV, and VM controls pass at `maturity_level` | each doc is real and covers its topic |
 | Mechanizer | SLAM-ME-01.01 | scanner listed under tools (flags a single ad hoc run); a scanner workflow on schedule, or push or release reaching the default branch; a run from that trigger in the last 30 days | none |
 | Inspector | SLAM-IN-01.01 | `assessments.self.evidence` declared and resolves; a Gemara threat catalog validates against the Gemara v1.6.0 CUE schema and has threats | coverage and project-specificity; notes evidence not committed to the repository |

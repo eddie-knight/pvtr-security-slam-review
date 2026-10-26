@@ -56,24 +56,30 @@ repository:
         comment: none yet
 `
 
-func Test_FileNamedSecurityInsightsYml(t *testing.T) {
+func Test_SecurityInsightsFileFound(t *testing.T) {
 	tests := []struct {
 		name       string
-		entries    []string
+		payload    data.Payload
 		wantResult gemara.Result
 		wantMsg    string
 	}{
-		{"exact name", []string{"README.md", "security-insights.yml"}, gemara.Passed, "Security Insights file is named security-insights.yml"},
-		{"uppercase", []string{"SECURITY-INSIGHTS.yml"}, gemara.Failed, "Security Insights file is named SECURITY-INSIGHTS.yml; the badge requires the lowercase name security-insights.yml"},
-		{"yaml extension", []string{"security-insights.yaml"}, gemara.Failed, "Security Insights file is named security-insights.yaml; the badge requires the lowercase name security-insights.yml"},
-		{"missing", []string{"README.md"}, gemara.Failed, "No security-insights.yml found at the repository root"},
+		{"root yml", data.Payload{RootEntries: []string{"README.md", "security-insights.yml"}, InsightsPath: "security-insights.yml"}, gemara.Passed, "si-tooling found the Security Insights file at security-insights.yml"},
+		// Argo Helm
+		{"root yaml", data.Payload{RootEntries: []string{"security-insights.yaml"}, InsightsPath: "security-insights.yaml"}, gemara.Passed, "si-tooling found the Security Insights file at security-insights.yaml"},
+		// Privateer
+		{".github", data.Payload{GitHubDirEntries: []string{"CODEOWNERS", "security-insights.yml"}, InsightsPath: ".github/security-insights.yml"}, gemara.Passed, "si-tooling found the Security Insights file at .github/security-insights.yml"},
+		// k8gb, Meshery
+		{"legacy uppercase", data.Payload{RootEntries: []string{"SECURITY-INSIGHTS.yml"}, InsightsPath: "SECURITY-INSIGHTS.yml"}, gemara.Passed, "si-tooling found the Security Insights file at SECURITY-INSIGHTS.yml; the spec names security-insights.yml or .yaml, and si-tooling accepts this name as a legacy spelling"},
+		{"missing", data.Payload{RootEntries: []string{"README.md"}}, gemara.Failed, "si-tooling found no Security Insights file (security-insights.yml or security-insights.yaml, at the root or in .github/)"},
 		// SOaC
-		{"both extensions", []string{"security-insights.yml", "security-insights.yaml"}, gemara.Failed, "Found 2 Security Insights files at the repository root (security-insights.yml, security-insights.yaml); keep only security-insights.yml"},
+		{"both extensions at the root", data.Payload{RootEntries: []string{"security-insights.yml", "security-insights.yaml"}, InsightsPath: "security-insights.yml"}, gemara.Failed, "Found 2 Security Insights files in the repository root (security-insights.yml, security-insights.yaml); keep only one"},
+		{"duplicates in .github", data.Payload{GitHubDirEntries: []string{"security-insights.yaml", "SECURITY-INSIGHTS.yml"}, InsightsPath: ".github/security-insights.yaml"}, gemara.Failed, "Found 2 Security Insights files in .github/ (security-insights.yaml, SECURITY-INSIGHTS.yml); keep only one"},
+		{"one per location", data.Payload{RootEntries: []string{"security-insights.yml"}, GitHubDirEntries: []string{"security-insights.yml"}, InsightsPath: "security-insights.yml"}, gemara.Passed, "si-tooling found the Security Insights file at security-insights.yml"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, msg, conf := FileNamedSecurityInsightsYml(data.Payload{RootEntries: tt.entries})
-			if result != tt.wantResult || msg != tt.wantMsg || conf != gemara.High {
+			result, msg, conf := SecurityInsightsFileFound(tt.payload)
+			if result != tt.wantResult || !strings.HasPrefix(msg, tt.wantMsg) || conf != gemara.High {
 				t.Errorf("got (%v, %q, %v), want (%v, %q, High)", result, msg, conf, tt.wantResult, tt.wantMsg)
 			}
 		})
@@ -89,7 +95,7 @@ func Test_ValidatesWithSITooling(t *testing.T) {
 	}{
 		{"valid", data.Payload{InsightsPath: "security-insights.yml"}, gemara.Passed, "Security Insights file validates with si-tooling: security-insights.yml"},
 		{"rejected", data.Payload{InsightsPath: "security-insights.yml", InsightsError: errors.New("unknown field \"foo\"")}, gemara.Failed, "Security Insights file does not validate with si-tooling: unknown field \"foo\""},
-		{"no file", data.Payload{}, gemara.Failed, "No Security Insights file found at the repository root"},
+		{"no file", data.Payload{}, gemara.Failed, "si-tooling found no Security Insights file at the repository root or in .github/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -211,11 +217,11 @@ func Test_StrimziPassesAllSteps(t *testing.T) {
 		InsightsRaw:  raw,
 	}
 	for name, step := range map[string]func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel){
-		"FileNamedSecurityInsightsYml": FileNamedSecurityInsightsYml,
-		"ValidatesWithSITooling":       ValidatesWithSITooling,
-		"RequiredFieldsPresent":        RequiredFieldsPresent,
-		"ValidatesAgainstSchema":       ValidatesAgainstSchema,
-		"RepositoryURLMatches":         RepositoryURLMatches,
+		"SecurityInsightsFileFound": SecurityInsightsFileFound,
+		"ValidatesWithSITooling":    ValidatesWithSITooling,
+		"RequiredFieldsPresent":     RequiredFieldsPresent,
+		"ValidatesAgainstSchema":    ValidatesAgainstSchema,
+		"RepositoryURLMatches":      RepositoryURLMatches,
 	} {
 		if result, msg, _ := step(payload); result != gemara.Passed {
 			t.Errorf("%s: got %v (%s), want Passed", name, result, msg)
