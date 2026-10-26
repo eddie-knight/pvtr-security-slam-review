@@ -1,15 +1,23 @@
 package inspector
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"html"
+	"io/fs"
 	"net/url"
 	"path"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
+	"cuelang.org/go/cue"
+	"cuelang.org/go/cue/cuecontext"
+	cueerrors "cuelang.org/go/cue/errors"
+	"cuelang.org/go/cue/load"
+	cueyaml "cuelang.org/go/encoding/yaml"
 	"github.com/eddie-knight/pvtr-security-slam-review/data"
 	"github.com/eddie-knight/pvtr-security-slam-review/evaluation_plans/reusable_steps"
 	"github.com/gemaraproj/go-gemara"
@@ -60,11 +68,10 @@ func SelfAssessmentResolves(payload data.Payload) (result gemara.Result, message
 	return gemara.Passed, "Self-assessment resolves: " + url, gemara.High
 }
 
-// GemaraCatalogWellFormed checks the shape of any Gemara threat catalog among
-// the evidence document and the same-repository files it links to: it has
-// threats, and each threat has an id, title, description, and at least one
-// capability. A written assessment has no catalog and passes untouched.
-// shortcut: structure via go-gemara's decoder, not the Gemara CUE schema; embed the schema if malformed catalogs get past this.
+// GemaraCatalogWellFormed validates any Gemara threat catalog among the
+// evidence document and the same-repository files it links to against the
+// Gemara v1.6.0 CUE schema, and requires it to have threats, which the schema
+// leaves optional. A written assessment has no catalog and passes untouched.
 func GemaraCatalogWellFormed(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	url := selfAssessmentURL(payload)
 	fetched, err := fetchURL(&payload, url)
@@ -91,42 +98,74 @@ func GemaraCatalogWellFormed(payload data.Payload) (result gemara.Result, messag
 	}
 	switch {
 	case len(problems) > 0:
-		return gemara.Failed, "Gemara threat catalog is not well formed: " + strings.Join(problems, "; "), gemara.High
+		if len(problems) > maxSchemaErrors {
+			problems = append(problems[:maxSchemaErrors], fmt.Sprintf("and %d more", len(problems)-maxSchemaErrors))
+		}
+		return gemara.Failed, "Gemara threat catalog does not validate against the Gemara v" + gemaraVersion + " CUE schema: " + strings.Join(problems, "; "), gemara.High
 	case len(catalogs) > 0:
-		return gemara.Passed, "Gemara threat catalog is well formed: " + strings.Join(catalogs, ", "), gemara.High
+		return gemara.Passed, "Gemara threat catalog validates against the Gemara v" + gemaraVersion + " CUE schema: " + strings.Join(catalogs, ", "), gemara.High
 	}
 	return gemara.Passed, "No Gemara threat catalog in the self-assessment evidence; judged as a written assessment", gemara.High
 }
 
-func threatCatalogProblems(raw []byte) []string {
-	catalog, err := gemara.Decode[gemara.ThreatCatalog](raw)
+// gemaraSchema is the CUE package at the root of github.com/gemaraproj/gemara
+// v1.6.0, the version Eddie ruled catalogs are validated against.
+//
+//go:embed schema/gemara-v1.6.0
+var gemaraSchema embed.FS
+
+const gemaraVersion = "1.6.0"
+
+// maxSchemaErrors keeps the message readable for a badly broken catalog.
+const maxSchemaErrors = 10
+
+var threatCatalogSchema = sync.OnceValues(func() (cue.Value, error) {
+	const dir = "/gemara"
+	overlay := map[string]load.Source{}
+	err := fs.WalkDir(gemaraSchema, "schema/gemara-v1.6.0", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || path.Ext(name) != ".cue" {
+			return err
+		}
+		body, err := gemaraSchema.ReadFile(name)
+		overlay[dir+strings.TrimPrefix(name, "schema/gemara-v1.6.0")] = load.FromBytes(body)
+		return err
+	})
 	if err != nil {
-		return []string{"does not decode as a ThreatCatalog: " + err.Error()}
+		return cue.Value{}, err
 	}
-	if len(catalog.Threats) == 0 {
-		return []string{"has no threats"}
+	instances := load.Instances([]string{"."}, &load.Config{Dir: dir, Overlay: overlay})
+	if instances[0].Err != nil {
+		return cue.Value{}, instances[0].Err
 	}
+	schema := cuecontext.New().BuildInstance(instances[0])
+	return schema.LookupPath(cue.ParsePath("#ThreatCatalog")), schema.Err()
+})
+
+// threatCatalogProblems lists the catalog's violations of #ThreatCatalog.
+func threatCatalogProblems(raw []byte) []string {
+	schema, err := threatCatalogSchema()
+	if err != nil {
+		return []string{"could not load the Gemara CUE schema: " + err.Error()}
+	}
+	file, err := cueyaml.Extract("catalog.yaml", raw)
+	if err != nil {
+		return []string{"is not valid YAML: " + err.Error()}
+	}
+	value := schema.Unify(schema.Context().BuildFile(file))
 	var problems []string
-	for i, threat := range catalog.Threats {
-		name := threat.Id
-		if name == "" {
-			name = fmt.Sprintf("threats[%d]", i)
+	for _, e := range cueerrors.Errors(value.Validate(cue.Concrete(true))) {
+		problem := strings.TrimPrefix(e.Error(), "#ThreatCatalog.")
+		// CUE reports a required field the catalog leaves out as an incomplete value.
+		if field, _, ok := strings.Cut(problem, ": incomplete value"); ok {
+			problem = field + ": missing"
 		}
-		var missing []string
-		for field, value := range map[string]string{"id": threat.Id, "title": threat.Title, "description": threat.Description} {
-			if strings.TrimSpace(value) == "" {
-				missing = append(missing, field)
-			}
-		}
-		if len(threat.Capabilities) == 0 {
-			missing = append(missing, "capabilities")
-		}
-		if len(missing) > 0 {
-			slices.Sort(missing)
-			problems = append(problems, name+" has no "+strings.Join(missing, ", "))
-		}
+		problems = append(problems, problem)
 	}
-	return problems
+	if !value.LookupPath(cue.ParsePath("threats")).Exists() {
+		problems = append(problems, "has no threats")
+	}
+	slices.Sort(problems)
+	return slices.Compact(problems)
 }
 
 // inRepository reports whether the URL is a file in the reviewed repository,

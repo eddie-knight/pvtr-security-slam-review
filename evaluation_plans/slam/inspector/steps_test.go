@@ -247,7 +247,7 @@ func TestAIReviewSelfAssessmentOutsideRepository(t *testing.T) {
 }
 
 func TestGemaraCatalogWellFormed(t *testing.T) {
-	const header = "title: Widget threats\nmetadata:\n  id: widget-threats\n  type: ThreatCatalog\n"
+	const header = "title: Widget threats\nmetadata:\n  id: widget-threats\n  type: ThreatCatalog\n  gemara-version: \"1.6.0\"\n  description: Widget threats\n  author: {id: widget, name: Widget maintainers, type: Human}\ngroups:\n  - {id: supply-chain, title: Supply chain, description: Release path}\n"
 	const good = header + "threats:\n  - id: WID.THR01\n    title: Tag replaced\n    description: An attacker repoints a tag.\n    group: supply-chain\n    capabilities:\n      - reference-id: WID\n        entries:\n          - reference-id: WID.CAP01\n"
 	tests := []struct {
 		name    string
@@ -256,9 +256,10 @@ func TestGemaraCatalogWellFormed(t *testing.T) {
 		wantMsg string
 	}{
 		{"written assessment", "# Widget self-assessment\n## Scope\n", gemara.Passed, "judged as a written assessment"},
-		{"well formed", good, gemara.Passed, "well formed: " + assessmentURL},
+		{"valid", good, gemara.Passed, "validates against the Gemara v1.6.0 CUE schema: " + assessmentURL},
 		{"no threats", header, gemara.Failed, "has no threats"},
-		{"threat without capabilities or description", header + "threats:\n  - id: WID.THR01\n    title: Tag replaced\n", gemara.Failed, "WID.THR01 has no capabilities, description"},
+		{"threat without description or capabilities", header + "threats:\n  - id: WID.THR01\n    title: Tag replaced\n", gemara.Failed, "threats.0.description: missing"},
+		{"undeclared group", strings.Replace(good, "group: supply-chain", "group: elsewhere", 1), gemara.Failed, "does not satisfy list.Contains"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
