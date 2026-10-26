@@ -37,14 +37,16 @@ func (p *Payload) plain() *http.Client {
 }
 
 // FetchURL fetches an https URL declared in Security Insights, without GitHub
-// credentials. github.com blob URLs are fetched as their raw content.
+// credentials. github.com blob URLs are fetched as their raw content, and
+// those on this repository's default branch at Commit.
 func (p *Payload) FetchURL(rawURL string) (FetchedURL, error) {
 	if p.cache != nil {
 		if entry, ok := p.cache.urls[rawURL]; ok {
 			return entry.fetched, entry.err
 		}
 	}
-	fetched, err := fetchURL(p.plain(), rawURL)
+	fetched, err := fetchURL(p.plain(), p.pinned(rawURL))
+	fetched.URL = rawURL
 	if p.cache != nil {
 		if p.cache.urls == nil {
 			p.cache.urls = make(map[string]urlCacheEntry)
@@ -81,6 +83,19 @@ func fetchURL(client *http.Client, declared string) (FetchedURL, error) {
 	}
 	fetched.Body = body
 	return fetched, nil
+}
+
+// pinned rewrites a github.com blob URL on this repository's default branch to
+// the same file at Commit; any other URL is returned unchanged.
+func (p *Payload) pinned(rawURL string) string {
+	if p.Commit == "" {
+		return rawURL
+	}
+	prefix := fmt.Sprintf("https://github.com/%s/%s/blob/%s/", p.Owner, p.Repo, p.DefaultBranch)
+	if len(rawURL) > len(prefix) && strings.EqualFold(rawURL[:len(prefix)], prefix) {
+		return fmt.Sprintf("https://github.com/%s/%s/blob/%s/", p.Owner, p.Repo, p.Commit) + rawURL[len(prefix):]
+	}
+	return rawURL
 }
 
 // rawGitHubURL rewrites https://github.com/{o}/{r}/blob/{ref}/{path} to its

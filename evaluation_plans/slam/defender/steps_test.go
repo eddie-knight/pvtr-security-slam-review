@@ -184,6 +184,9 @@ func Test_ResultPublished(t *testing.T) {
 func Test_ResultIsRecurring(t *testing.T) {
 	strimzi := strimziHub(t).evaluations
 	sameTime := []data.GrcStoreEvaluation{strimzi[0], strimzi[0]}
+	sameDay := []data.GrcStoreEvaluation{strimzi[0], strimzi[1]}
+	untrusted := []data.GrcStoreEvaluation{strimzi[0], strimzi[2]}
+	untrusted[1].Signer.CallerRepository = "fork/strimzi-kafka-operator"
 	stale := []data.GrcStoreEvaluation{strimzi[0], strimzi[1]}
 	stale[0].RunAt, stale[1].RunAt = "2026-08-02T00:00:00Z", "2026-08-01T00:00:00Z"
 	tests := []struct {
@@ -194,6 +197,8 @@ func Test_ResultIsRecurring(t *testing.T) {
 		{"strimzi", hub{evaluations: strimzi}, gemara.Passed},
 		{"single run", hub{evaluations: strimzi[:1]}, gemara.Failed},
 		{"same run twice", hub{evaluations: sameTime}, gemara.Failed},
+		{"two runs on one day", hub{evaluations: sameDay}, gemara.Failed},
+		{"second day published from a fork", hub{evaluations: untrusted}, gemara.Failed},
 		{"stale", hub{evaluations: stale}, gemara.Failed},
 		{"none", hub{}, gemara.Failed},
 		{"hub error", hub{evalErr: errors.New("boom")}, gemara.NeedsReview},
@@ -201,7 +206,7 @@ func Test_ResultIsRecurring(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.hub.install(t)
-			if result, message, _ := ResultIsRecurring(payloadWithTarget(strimziTarget)); result != tt.want {
+			if result, message, _ := ResultIsRecurring(strimziPayload(t)); result != tt.want {
 				t.Errorf("got %v (%s), want %v", result, message, tt.want)
 			}
 		})
@@ -222,7 +227,7 @@ func Test_TrustedPublisher(t *testing.T) {
 		{"uri case differs", func(t *data.GrcStoreTarget) { t.URI = "https://github.com/Strimzi/Strimzi-Kafka-Operator" }, gemara.Passed, "verified by GitHub OIDC"},
 		{"published from a fork", func(t *data.GrcStoreTarget) {
 			t.Versions[0].Latest.Signer.CallerRepository = "fork/strimzi-kafka-operator"
-		}, gemara.Failed, `published from "fork/strimzi-kafka-operator"`},
+		}, gemara.Failed, `from "fork/strimzi-kafka-operator"`},
 		{"other workflow", func(t *data.GrcStoreTarget) {
 			t.Versions[0].Latest.Signer.WorkflowRef = "strimzi/strimzi-kafka-operator/.github/workflows/publish.yml@refs/heads/main"
 		}, gemara.Failed, "not the revanite-io/pvtr-publish-results publish workflow"},
@@ -250,6 +255,9 @@ const (
 	unknownL1 = `{"requirement":{"entry-id":"OSPS-AC-02.01"},"result":"Unknown","applicability":["maturity-1","maturity-2","maturity-3"],"steps-executed":1}`
 	skippedL2 = `{"requirement":{"entry-id":"OSPS-AC-04.01"},"result":"Not Run","applicability":["maturity-2","maturity-3"],"steps-executed":0}`
 	failedL1  = `{"requirement":{"entry-id":"OSPS-VM-02.01"},"result":"Failed","applicability":["maturity-1"],"steps-executed":1}`
+	// skippedL1Only is what a level-2 scan publishes for a control the
+	// scanner's catalog tags maturity-1 only.
+	skippedL1Only = `{"requirement":{"entry-id":"OSPS-BR-07.01"},"result":"Not Run","applicability":["maturity-1"],"steps-executed":0}`
 )
 
 func Test_LatestResultHasNoFailures(t *testing.T) {
@@ -266,8 +274,9 @@ func Test_LatestResultHasNoFailures(t *testing.T) {
 		{"unknown needs review", 2, logWith(passedL1, unknownL1), nil, gemara.NeedsReview, "OSPS-AC-02.01"},
 		{"level-1 scan against level 2", 2, logWith(passedL1, skippedL2), nil, gemara.Failed, "publish a scan at maturity level 2"},
 		{"level-2 skip ignored at level 1", 1, logWith(passedL1, skippedL2), nil, gemara.Passed, "maturity level 1"},
-		{"maturity-1-only entry ignored at level 2", 2, logWith(passedL1, failedL1), nil, gemara.Passed, "maturity level 2"},
+		{"maturity-1-only entry counts at level 2", 2, logWith(passedL1, failedL1), nil, gemara.Failed, "OSPS-VM-02.01"},
 		{"maturity-1-only entry counts at level 1", 1, logWith(passedL1, failedL1), nil, gemara.Failed, "OSPS-VM-02.01"},
+		{"maturity-1-only entry a level-2 scan skipped", 2, logWith(passedL1, skippedL1Only), nil, gemara.NeedsReview, "tags them only for lower levels, so the scan did not evaluate them; check them by hand: OSPS-BR-07.01"},
 		{"log unreadable", 2, nil, errors.New("boom"), gemara.NeedsReview, "boom"},
 		{"level missing", nil, logWith(passedL1), nil, gemara.NeedsReview, "maturity_level"},
 		{"level out of range", 4, logWith(passedL1), nil, gemara.NeedsReview, "maturity_level"},
@@ -287,6 +296,18 @@ func Test_LatestResultHasNoFailures(t *testing.T) {
 				t.Errorf("got %v %q, want %v containing %q", result, message, tt.want, tt.wantMsg)
 			}
 		})
+	}
+}
+
+func Test_AIReviewUncheckedControlEvidence_UnknownOnly(t *testing.T) {
+	h := strimziHub(t)
+	h.log = logWith(passedL1, unknownL1)
+	h.install(t)
+	client := &fakeAIClient{}
+	stubAIClient(t, client)
+	result, message, _ := AIReviewUncheckedControlEvidence(strimziPayload(t))
+	if result != gemara.NeedsReview || !strings.Contains(message, "OSPS-AC-02.01") || !strings.Contains(message, "re-scan") || client.calls != 0 {
+		t.Errorf("got %v %q with %d AI calls, want NeedsReview naming the Unknown control without AI", result, message, client.calls)
 	}
 }
 
@@ -354,8 +375,8 @@ func Test_AIReviewUncheckedControlEvidence(t *testing.T) {
 	for _, control := range packet.UncheckedControls {
 		listed[control.ID] = true
 	}
-	// At level 2, the maturity-1-only and maturity-3-only entries do not apply.
-	for id, want := range map[string]bool{"OSPS-BR-01.03": true, "OSPS-SA-03.01": true, "OSPS-BR-01.02": true, "OSPS-AC-04.02": false, "OSPS-VM-02.01": false, "OSPS-QA-03.01": false} {
+	// At level 2, maturity-1-only entries apply (levels are cumulative); maturity-3-only ones do not.
+	for id, want := range map[string]bool{"OSPS-BR-01.03": true, "OSPS-SA-03.01": true, "OSPS-BR-01.02": true, "OSPS-AC-04.02": false, "OSPS-VM-02.01": true, "OSPS-QA-03.01": false} {
 		if listed[id] != want {
 			t.Errorf("%s listed = %v, want %v", id, listed[id], want)
 		}

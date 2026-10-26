@@ -15,6 +15,7 @@ import (
 	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/privateerproj/privateer-sdk/pluginkit"
 	"github.com/privateerproj/privateer-sdk/shared"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -36,11 +37,18 @@ var (
 	//go:embed data/catalogs
 	files   embed.FS
 	dataDir = filepath.Join("data", "catalogs")
+
+	// evaluatedCommit carries the Loader's commit to the target builder, which
+	// the SDK gives only the config.
+	evaluatedCommit string
 )
 
 func main() {
 	if VersionPostfix != "" {
 		Version = fmt.Sprintf("%s-%s", Version, VersionPostfix)
+	}
+	if GitCommitHash != "" {
+		Version = fmt.Sprintf("%s+%s", Version, GitCommitHash)
 	}
 
 	orchestrator, err := newOrchestrator()
@@ -57,9 +65,30 @@ func main() {
 		orchestrator,
 	)
 
+	exitLikeStart(runCmd, orchestrator)
+
 	err = runCmd.Execute()
 	if err != nil {
 		os.Exit(shared.InternalError)
+	}
+}
+
+// exitLikeStart makes debug mode exit with the code a privateer run gets: the
+// SDK's debug command prints a config or load error and exits 0, so a target
+// that never ran reads as a pass.
+func exitLikeStart(runCmd *cobra.Command, orchestrator *pluginkit.EvaluationOrchestrator) {
+	for _, cmd := range runCmd.Commands() {
+		if cmd.Name() != "debug" {
+			continue
+		}
+		cmd.Run = func(cmd *cobra.Command, args []string) {
+			cmd.Print("Running in debug mode\n")
+			err := orchestrator.Mobilize()
+			if err != nil {
+				cmd.Println(err)
+			}
+			os.Exit(pluginkit.ExitCodeFor(orchestrator, err))
+		}
 	}
 }
 
@@ -71,7 +100,13 @@ func newOrchestrator() (*pluginkit.EvaluationOrchestrator, error) {
 		Publisher:     "eddie-knight",
 		License:       "Apache-2.0",
 	}
-	orchestrator.AddLoader(data.Loader)
+	orchestrator.AddLoader(func(c *config.Config) (any, error) {
+		payload, err := data.Loader(c)
+		if p, ok := payload.(data.Payload); ok {
+			evaluatedCommit = p.Commit
+		}
+		return payload, err
+	})
 	orchestrator.AddTargetBuilder(func(c *config.Config) gemara.Resource {
 		slug := fmt.Sprintf("%s/%s", c.GetString("owner"), c.GetString("repo"))
 		return gemara.Resource{
@@ -79,6 +114,8 @@ func newOrchestrator() (*pluginkit.EvaluationOrchestrator, error) {
 			Name: slug,
 			Type: gemara.Software,
 			Uri:  fmt.Sprintf("https://github.com/%s", slug),
+			// The default branch commit every repository file was read at.
+			Version: evaluatedCommit,
 		}
 	})
 

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	pathpkg "path"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/google/go-github/v74/github"
@@ -33,6 +35,9 @@ type Payload struct {
 	Owner         string
 	Repo          string
 	DefaultBranch string
+	// Commit is the default branch's head when the run started. Repository
+	// files are read at it, so every step sees the same tree.
+	Commit string
 	// RootEntries are the names of the files and directories at the root of
 	// the default branch, with their original case.
 	RootEntries []string
@@ -82,6 +87,15 @@ type grcStoreCacheEntry struct {
 type WorkflowFile struct {
 	Path    string
 	Content []byte
+}
+
+// WorkflowRun is one run of a workflow, as the Actions API lists it.
+type WorkflowRun struct {
+	Event      string
+	Status     string
+	Conclusion string
+	CreatedAt  time.Time
+	URL        string
 }
 
 // FetchedURL is the outcome of fetching a URL declared in Security Insights.
@@ -175,15 +189,31 @@ func (p Payload) ClearEvidence() {
 
 // Loader builds the Payload: repository metadata, root listing, and the
 // Security Insights file. Everything else is fetched lazily by the methods.
+// A target that cannot load is logged as an error, so its log never reads as
+// a clean run.
 func Loader(config *config.Config) (payload any, err error) {
-	if err := validateMaturityLevel(config); err != nil {
-		return nil, err
-	}
 	p := newPayload(config)
-	if err := p.load(); err != nil {
+	err = validateTarget(config)
+	if err == nil {
+		err = p.load()
+	}
+	if err != nil {
+		p.logger().Error("target not evaluated: " + err.Error())
 		return nil, err
 	}
+	p.logger().Info(fmt.Sprintf("evaluating %s/%s at %s@%s", p.Owner, p.Repo, p.DefaultBranch, p.Commit))
 	return any(*p), nil
+}
+
+// validateTarget fails the target before any request when its vars cannot
+// describe a repository to review.
+func validateTarget(c *config.Config) error {
+	for _, name := range []string{"owner", "repo"} {
+		if strings.TrimSpace(c.GetString(name)) == "" {
+			return fmt.Errorf("%s is empty", name)
+		}
+	}
+	return validateMaturityLevel(c)
 }
 
 // maturityBadges are the badges whose checks depend on maturity_level.
@@ -258,9 +288,15 @@ func (p *Payload) load() error {
 		return fmt.Errorf("failed to read repository %s/%s: %w", p.Owner, p.Repo, err)
 	}
 	p.DefaultBranch = repo.GetDefaultBranch()
+	// An empty repository has no branch head either
+	branch, _, err := p.ghClient.Repositories.GetBranch(ctx, p.Owner, p.Repo, p.DefaultBranch, 1)
+	if err != nil && !isNotFound(err) {
+		return fmt.Errorf("failed to read the head of %s/%s@%s: %w", p.Owner, p.Repo, p.DefaultBranch, err)
+	}
+	p.Commit = branch.GetCommit().GetSHA()
 
 	_, root, _, err := p.ghClient.Repositories.GetContents(ctx, p.Owner, p.Repo, "",
-		&github.RepositoryContentGetOptions{Ref: p.DefaultBranch})
+		&github.RepositoryContentGetOptions{Ref: p.ref()})
 	// An empty repository has no root listing: GitHub answers 404
 	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("failed to list repository root: %w", err)
@@ -336,6 +372,14 @@ func (p *Payload) ensureInsightsInitialized() {
 	}
 }
 
+// ref is the commit repository files are read at.
+func (p *Payload) ref() string {
+	if p.Commit != "" {
+		return p.Commit
+	}
+	return p.DefaultBranch
+}
+
 func (p *Payload) logger() hclog.Logger {
 	if p.Config == nil || p.Config.Logger == nil {
 		return hclog.NewNullLogger()
@@ -348,7 +392,7 @@ func isNotFound(err error) bool {
 	return errors.As(err, &ghErr) && ghErr.Response != nil && ghErr.Response.StatusCode == http.StatusNotFound
 }
 
-// GetFileContent returns a repository file's bytes from the default branch.
+// GetFileContent returns a repository file's bytes at Commit.
 // Errors are cached too: a file that just failed fails the same way for every
 // step. A payload without a cache (as built directly in tests) calls through.
 func (p *Payload) GetFileContent(path string) ([]byte, error) {
@@ -374,7 +418,7 @@ func (p *Payload) fetchFileContent(path string) ([]byte, error) {
 		return nil, fmt.Errorf("payload missing GitHub client")
 	}
 	file, _, _, err := p.ghClient.Repositories.GetContents(context.Background(), p.Owner, p.Repo, path,
-		&github.RepositoryContentGetOptions{Ref: p.DefaultBranch})
+		&github.RepositoryContentGetOptions{Ref: p.ref()})
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve file content for %s: %w", path, err)
 	}
@@ -407,7 +451,7 @@ func (p *Payload) fetchWorkflowFiles() ([]WorkflowFile, error) {
 	}
 	const dir = ".github/workflows"
 	_, entries, _, err := p.ghClient.Repositories.GetContents(context.Background(), p.Owner, p.Repo, dir,
-		&github.RepositoryContentGetOptions{Ref: p.DefaultBranch})
+		&github.RepositoryContentGetOptions{Ref: p.ref()})
 	if isNotFound(err) {
 		return nil, nil
 	}
@@ -426,4 +470,39 @@ func (p *Payload) fetchWorkflowFiles() ([]WorkflowFile, error) {
 		files = append(files, WorkflowFile{Path: entry.GetPath(), Content: content})
 	}
 	return files, nil
+}
+
+// GetWorkflowRuns returns the most recent runs of the workflow at path on the
+// default branch, newest first.
+func (p *Payload) GetWorkflowRuns(path string) ([]WorkflowRun, error) {
+	if p.ghClient == nil {
+		return nil, fmt.Errorf("payload missing GitHub client")
+	}
+	list, _, err := p.ghClient.Actions.ListWorkflowRunsByFileName(context.Background(), p.Owner, p.Repo, pathpkg.Base(path),
+		&github.ListWorkflowRunsOptions{Branch: p.DefaultBranch, ListOptions: github.ListOptions{PerPage: 20}})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list runs of %s: %w", path, err)
+	}
+	var runs []WorkflowRun
+	for _, run := range list.WorkflowRuns {
+		runs = append(runs, WorkflowRun{
+			Event:      run.GetEvent(),
+			Status:     run.GetStatus(),
+			Conclusion: run.GetConclusion(),
+			CreatedAt:  run.GetCreatedAt().Time,
+			URL:        run.GetHTMLURL(),
+		})
+	}
+	return runs, nil
+}
+
+// PrivateReportingEnabled reports whether GitHub private vulnerability
+// reporting is switched on for owner/repo, which may be another repository
+// such as the organization's .github.
+func (p *Payload) PrivateReportingEnabled(owner, repo string) (bool, error) {
+	if p.ghClient == nil {
+		return false, fmt.Errorf("payload missing GitHub client")
+	}
+	enabled, _, err := p.ghClient.Repositories.IsPrivateReportingEnabled(context.Background(), owner, repo)
+	return enabled, err
 }

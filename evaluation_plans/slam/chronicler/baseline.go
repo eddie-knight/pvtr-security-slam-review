@@ -17,25 +17,38 @@ var (
 	scannerSteps = scanner.OSPS
 )
 
-// documentationControls are the OSPS Baseline documentation controls with
-// the lowest maturity level each applies at.
-// shortcut: levels copied from the scanner's OSPS_Baseline_2026_08 catalog, which it embeds in package main; update when the Baseline moves a DO control.
+// documentationControls are the OSPS Baseline documentation-shaped controls
+// (the DO family, and the GV and VM controls the Slam's chronicler guide
+// counts) with the lowest maturity level each applies at.
+// shortcut: levels copied from the scanner's OSPS_Baseline_2026_08 catalog, which it embeds in package main; update when the Baseline moves a control.
 var documentationControls = []struct {
 	id    string
 	level int
 }{
 	{"OSPS-DO-01.01", 1},
 	{"OSPS-DO-02.01", 1},
+	{"OSPS-GV-03.01", 1},
+	{"OSPS-VM-02.01", 1},
 	{"OSPS-DO-06.01", 2},
 	{"OSPS-DO-07.01", 2},
+	{"OSPS-GV-01.01", 2},
+	{"OSPS-GV-01.02", 2},
+	{"OSPS-GV-03.02", 2},
+	{"OSPS-VM-01.01", 2},
+	{"OSPS-VM-03.01", 2},
+	{"OSPS-VM-04.01", 2},
 	{"OSPS-DO-03.01", 3},
 	{"OSPS-DO-03.02", 3},
 	{"OSPS-DO-04.01", 3},
 	{"OSPS-DO-05.01", 3},
+	{"OSPS-GV-04.01", 3},
+	{"OSPS-VM-05.01", 3},
+	{"OSPS-VM-05.02", 3},
+	{"OSPS-VM-06.01", 3},
 }
 
 // BaselineDocumentationControlsMet runs the OSPS Baseline scanner's own steps
-// for every documentation control at the project's maturity level.
+// for every documentation-shaped control at the project's maturity level.
 func BaselineDocumentationControlsMet(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	level, ok := reusable_steps.MaturityLevel(payload)
 	if !ok {

@@ -6,6 +6,7 @@ import (
 	"html"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/eddie-knight/pvtr-security-slam-review/data"
@@ -56,6 +57,87 @@ func SelfAssessmentResolves(payload data.Payload) (result gemara.Result, message
 		return gemara.Failed, fmt.Sprintf("Self-assessment %s does not resolve (HTTP %d)", url, fetched.StatusCode), gemara.High
 	}
 	return gemara.Passed, "Self-assessment resolves: " + url, gemara.High
+}
+
+// GemaraCatalogWellFormed checks the shape of any Gemara threat catalog among
+// the evidence document and the same-repository files it links to: it has
+// threats, and each threat has an id, title, description, and at least one
+// capability. A written assessment has no catalog and passes untouched.
+// shortcut: structure via go-gemara's decoder, not the Gemara CUE schema; embed the schema if malformed catalogs get past this.
+func GemaraCatalogWellFormed(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	url := selfAssessmentURL(payload)
+	fetched, err := fetchURL(&payload, url)
+	if err != nil || fetched.StatusCode < 200 || fetched.StatusCode > 299 {
+		return gemara.NeedsReview, "Self-assessment could not be fetched to check for a Gemara threat catalog: " + url, gemara.Low
+	}
+	documents := map[string][]byte{url: fetched.Body}
+	order := []string{url}
+	for _, link := range sameRepoLinks(url, string(fetched.Body)) {
+		if linked, err := fetchURL(&payload, link); err == nil && linked.StatusCode >= 200 && linked.StatusCode < 300 {
+			documents[link] = linked.Body
+			order = append(order, link)
+		}
+	}
+	var catalogs, problems []string
+	for _, source := range order {
+		if kind, err := gemara.DetectType(documents[source]); err != nil || kind != gemara.ThreatCatalogArtifact {
+			continue
+		}
+		catalogs = append(catalogs, source)
+		for _, problem := range threatCatalogProblems(documents[source]) {
+			problems = append(problems, source+": "+problem)
+		}
+	}
+	switch {
+	case len(problems) > 0:
+		return gemara.Failed, "Gemara threat catalog is not well formed: " + strings.Join(problems, "; "), gemara.High
+	case len(catalogs) > 0:
+		return gemara.Passed, "Gemara threat catalog is well formed: " + strings.Join(catalogs, ", "), gemara.High
+	}
+	return gemara.Passed, "No Gemara threat catalog in the self-assessment evidence; judged as a written assessment", gemara.High
+}
+
+func threatCatalogProblems(raw []byte) []string {
+	catalog, err := gemara.Decode[gemara.ThreatCatalog](raw)
+	if err != nil {
+		return []string{"does not decode as a ThreatCatalog: " + err.Error()}
+	}
+	if len(catalog.Threats) == 0 {
+		return []string{"has no threats"}
+	}
+	var problems []string
+	for i, threat := range catalog.Threats {
+		name := threat.Id
+		if name == "" {
+			name = fmt.Sprintf("threats[%d]", i)
+		}
+		var missing []string
+		for field, value := range map[string]string{"id": threat.Id, "title": threat.Title, "description": threat.Description} {
+			if strings.TrimSpace(value) == "" {
+				missing = append(missing, field)
+			}
+		}
+		if len(threat.Capabilities) == 0 {
+			missing = append(missing, "capabilities")
+		}
+		if len(missing) > 0 {
+			slices.Sort(missing)
+			problems = append(problems, name+" has no "+strings.Join(missing, ", "))
+		}
+	}
+	return problems
+}
+
+// inRepository reports whether the URL is a file in the reviewed repository,
+// where the badge page asks for the assessment to be committed.
+func inRepository(payload data.Payload, rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	prefix := strings.ToLower("/" + payload.Owner + "/" + payload.Repo + "/")
+	host := strings.ToLower(u.Host)
+	return (host == "github.com" || host == "raw.githubusercontent.com") && strings.HasPrefix(strings.ToLower(u.Path), prefix)
 }
 
 type assessmentDeclaration struct {
@@ -151,7 +233,15 @@ func AIReviewSelfAssessment(payload data.Payload) (result gemara.Result, message
 	for _, source := range packet.Collection.Truncated {
 		incomplete = append(incomplete, source+" truncated")
 	}
-	return reusable_steps.AIReview(payload, behavior, string(material), sources, incomplete)
+	result, message, confidence = reusable_steps.AIReview(payload, behavior, string(material), sources, incomplete)
+	// Only the last step's message reaches the log, so the location note goes here.
+	if !inRepository(payload, url) {
+		message += fmt.Sprintf(" [The self-assessment is not committed to %s/%s, as the badge page asks: %s]", payload.Owner, payload.Repo, url)
+		if result == gemara.Passed {
+			result, confidence = gemara.NeedsReview, gemara.Medium
+		}
+	}
+	return result, message, confidence
 }
 
 // documentContent is the fetched text, HTML reduced to words, cut to what is

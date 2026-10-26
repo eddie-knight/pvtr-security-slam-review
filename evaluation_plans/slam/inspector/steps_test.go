@@ -234,3 +234,39 @@ func TestAIReviewSelfAssessmentFollowsLinks(t *testing.T) {
 		t.Errorf("collection = %+v, want incomplete with missing.md listed", packet.Collection)
 	}
 }
+
+func TestAIReviewSelfAssessmentOutsideRepository(t *testing.T) {
+	const passBody = `{"result":"pass","confidence":"high","message":"m","explanation":"Covers all five topics."}`
+	stubFetch(t, data.FetchedURL{StatusCode: 200, Body: []byte("# Widget self-assessment")}, nil)
+	stubAIClient(t, &fakeAIClient{body: passBody})
+	const elsewhere = "https://docs.example.com/widget/security-assessment"
+	result, message, _ := AIReviewSelfAssessment(newPayload(si.Assessment{Evidence: ptrTo(si.URL(elsewhere))}))
+	if result != gemara.NeedsReview || !strings.Contains(message, "not committed to example/widget") || !strings.Contains(message, "Covers all five topics.") {
+		t.Errorf("got %v %q, want NeedsReview keeping the verdict and noting the location", result, message)
+	}
+}
+
+func TestGemaraCatalogWellFormed(t *testing.T) {
+	const header = "title: Widget threats\nmetadata:\n  id: widget-threats\n  type: ThreatCatalog\n"
+	const good = header + "threats:\n  - id: WID.THR01\n    title: Tag replaced\n    description: An attacker repoints a tag.\n    group: supply-chain\n    capabilities:\n      - reference-id: WID\n        entries:\n          - reference-id: WID.CAP01\n"
+	tests := []struct {
+		name    string
+		body    string
+		want    gemara.Result
+		wantMsg string
+	}{
+		{"written assessment", "# Widget self-assessment\n## Scope\n", gemara.Passed, "judged as a written assessment"},
+		{"well formed", good, gemara.Passed, "well formed: " + assessmentURL},
+		{"no threats", header, gemara.Failed, "has no threats"},
+		{"threat without capabilities or description", header + "threats:\n  - id: WID.THR01\n    title: Tag replaced\n", gemara.Failed, "WID.THR01 has no capabilities, description"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubFetch(t, data.FetchedURL{StatusCode: 200, Body: []byte(tt.body)}, nil)
+			result, message, _ := GemaraCatalogWellFormed(newPayload(si.Assessment{Evidence: ptrTo(si.URL(assessmentURL))}))
+			if result != tt.want || !strings.Contains(message, tt.wantMsg) {
+				t.Errorf("got %v %q, want %v containing %q", result, message, tt.want, tt.wantMsg)
+			}
+		})
+	}
+}

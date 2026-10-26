@@ -254,3 +254,80 @@ func TestAIReviewReadinessNotConfigured(t *testing.T) {
 		t.Errorf("got %v, want NeedsReview", result)
 	}
 }
+
+func TestFailuresLinkTheSecurityPolicy(t *testing.T) {
+	stubSources(t, map[string]string{policyURL: "# Security\nEmail us."}, nil)
+	_, message, _ := SecurityPolicyHasStewardStatement(craPayload())
+	if !strings.HasSuffix(message, "Security policy for review: "+policyURL) {
+		t.Errorf("declared policy: message %q does not end with its link", message)
+	}
+
+	stubSources(t, nil, map[string]string{".github/SECURITY.md": "# Security"})
+	payload := craPayload()
+	payload.Owner, payload.Repo, payload.DefaultBranch = "example", "project", "main"
+	payload.Insights.Project.VulnerabilityReporting = si.VulnerabilityReporting{}
+	_, message, _ = SecurityInsightsLinksPresent(payload)
+	if !strings.HasSuffix(message, "Security policy for review: https://github.com/example/project/blob/main/.github/SECURITY.md") {
+		t.Errorf("undeclared policy: message %q does not link the repository's SECURITY.md", message)
+	}
+}
+
+func TestOtherStewardIsMarkedForReview(t *testing.T) {
+	stubSources(t, map[string]string{policyURL: "# Security"}, nil)
+	client := &fakeAIClient{}
+	stubAI(t, client)
+	for uri, wantReview := range map[string]bool{"https://www.apache.org": true, "https://www.cncf.io/projects/": false, "https://lfx.linuxfoundation.org/x": false} {
+		payload := craPayload()
+		payload.Insights.Project.Steward = &si.Link{Uri: uri}
+		for name, step := range map[string]func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel){
+			"SecurityInsightsLinksPresent": SecurityInsightsLinksPresent, "SecurityPolicyHasStewardStatement": SecurityPolicyHasStewardStatement,
+			"ReportingChannelsWork": ReportingChannelsWork, "AIReviewReadiness": AIReviewReadiness,
+		} {
+			result, message, _ := step(payload)
+			if got := result == gemara.NeedsReview && strings.Contains(message, "Security policy for review: "+policyURL); got != wantReview {
+				t.Errorf("%s with steward %s: got %v %q, want marked for review %v", name, uri, result, message, wantReview)
+			}
+		}
+	}
+	if client.calls != 2 {
+		t.Errorf("AI calls = %d, want 2: the two LF stewards only", client.calls)
+	}
+}
+
+func TestReportingChannelsWork(t *testing.T) {
+	escalation := "## Escalation\nWe escalate to steward@linuxfoundation.org.\n"
+	pvrPolicy := wrapped + "Use https://github.com/example/project/security/advisories/new\n"
+	tests := []struct {
+		name    string
+		urls    map[string]string
+		enabled bool
+		err     error
+		want    gemara.Result
+		wantMsg string
+	}{
+		{"all present", map[string]string{policyURL: pvrPolicy, contributingURL: escalation}, true, nil, gemara.Passed, "names steward@linuxfoundation.org"},
+		{"private reporting off", map[string]string{policyURL: pvrPolicy, contributingURL: escalation}, false, nil, gemara.Failed, "not enabled on example/project"},
+		{"private reporting unreadable", map[string]string{policyURL: pvrPolicy, contributingURL: escalation}, false, errors.New("403"), gemara.NeedsReview, "403"},
+		{"no steward address", map[string]string{policyURL: wrapped, contributingURL: "# Contributing"}, true, nil, gemara.Failed, "does not name the steward escalation address"},
+		{"out of scope owes nothing", map[string]string{policyURL: OutOfScopeStatement}, false, nil, gemara.Passed, "out of CRA scope"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubSources(t, tt.urls, nil)
+			orig := privateReportingEnabled
+			privateReportingEnabled = func(_ *data.Payload, owner, repo string) (bool, error) {
+				if owner != "example" || repo != "project" {
+					t.Errorf("checked %s/%s", owner, repo)
+				}
+				return tt.enabled, tt.err
+			}
+			t.Cleanup(func() { privateReportingEnabled = orig })
+			payload := craPayload()
+			payload.Insights.Project.VulnerabilityReporting.Comment = nil
+			result, message, _ := ReportingChannelsWork(payload)
+			if result != tt.want || !strings.Contains(message, tt.wantMsg) {
+				t.Errorf("got %v %q, want %v containing %q", result, message, tt.want, tt.wantMsg)
+			}
+		})
+	}
+}

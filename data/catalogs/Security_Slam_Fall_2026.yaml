@@ -52,8 +52,8 @@ controls:
         state: Active
         text: |
           Security Insights MUST list the OSPS Baseline scanner as a tool, and a
-          workflow on the default branch MUST run it on a recurring trigger
-          without using pull_request_target.
+          workflow on the default branch MUST run it on a recurring trigger and
+          have run from that trigger in the last 30 days.
     group: ME
     id: SLAM-ME-01
     objective: |

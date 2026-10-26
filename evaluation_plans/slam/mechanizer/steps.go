@@ -2,9 +2,11 @@ package mechanizer
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/eddie-knight/pvtr-security-slam-review/data"
 	"github.com/gemaraproj/go-gemara"
@@ -22,12 +24,17 @@ var scannerMarkers = []string{
 	"privateer",
 }
 
-// Test hooks: the default branch's workflows, and the remote reusable
-// workflows they call.
+// Test hooks: the default branch's workflows, the remote reusable workflows
+// they call, a workflow's recent runs, and the clock.
 var (
 	getWorkflowFiles = (*data.Payload).GetWorkflowFiles
 	fetchURL         = (*data.Payload).FetchURL
+	getWorkflowRuns  = (*data.Payload).GetWorkflowRuns
+	now              = time.Now
 )
+
+// maxRunAge is how recent a run must be for the scan to count as live.
+const maxRunAge = 30 * 24 * time.Hour
 
 // scannerUses identify a `uses:` that runs the scanner: the reusable publish
 // workflow (job-level), the action, or the scanner itself as an action or a
@@ -45,13 +52,6 @@ var scannerRuns = []string{
 	"privateer run",
 	"pvtr run",
 }
-
-// pinExempt are the reusable workflows that must be called by tag: the grc.store
-// hub compares the signing certificate's workflow ref to the tag and rejects a
-// SHA-pinned call.
-var pinExempt = []string{"revanite-io/pvtr-publish-results/"}
-
-var fullSHA = regexp.MustCompile(`@[0-9a-f]{40}$`)
 
 // recurringTriggers match the badge page: a schedule, or every push or release
 // to the default branch. workflow_dispatch and pull_request alone are not live.
@@ -138,54 +138,35 @@ func singleRunLocation(results si.SecurityToolResults) (string, bool) {
 
 // ScannerWorkflowRequirements reports every workflow requirement in one
 // message, because an assessment keeps only its last step's message: the
-// workflow and step that run the scanner, a recurring trigger, actions pinned
-// to full commit SHAs, and no pull_request_target. It repeats the ad hoc
-// results warning from BaselineScannerListedInTools for the same reason.
+// workflow and step that run the scanner, a recurring trigger on the default
+// branch, and a recent run from that trigger. It repeats the ad hoc results
+// warning from BaselineScannerListedInTools for the same reason.
 func ScannerWorkflowRequirements(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	workflows, result, message := scannerWorkflows(payload)
 	if workflows == nil {
 		return result, message, gemara.High
 	}
-	var matched, recurring, notRecurring, unpinned, unsafe []string
+	var matched, recurring, notRecurring []string
+	var live []scannerWorkflow
 	for _, wf := range workflows {
 		matched = append(matched, wf.path+" ("+wf.match+")")
-		var live []string
-		for _, trigger := range wf.triggers {
-			if slices.Contains(recurringTriggers, trigger) {
-				live = append(live, trigger)
-			}
-		}
-		if len(live) > 0 {
-			recurring = append(recurring, wf.path+" on "+strings.Join(live, ", "))
+		if fired := liveTriggers(wf.on, payload.DefaultBranch); len(fired) > 0 {
+			recurring = append(recurring, wf.path+" on "+strings.Join(fired, ", "))
+			live = append(live, wf)
 		} else {
-			notRecurring = append(notRecurring, fmt.Sprintf("%s (%s)", wf.path, strings.Join(wf.triggers, ", ")))
-		}
-		if slices.Contains(wf.triggers, "pull_request_target") {
-			unsafe = append(unsafe, wf.path)
-		}
-		for _, uses := range wf.unpinned {
-			unpinned = append(unpinned, wf.path+": "+uses)
+			notRecurring = append(notRecurring, fmt.Sprintf("%s (%s)", wf.path, strings.Join(triggers(wf.on), ", ")))
 		}
 	}
 	result = gemara.Passed
 	report := []string{"Scanner runs in " + strings.Join(matched, "; ")}
-	if len(notRecurring) > 0 {
+	if len(live) == 0 {
 		result = gemara.Failed
-		report = append(report, "FAIL recurring trigger: no schedule, push, or release in "+strings.Join(notRecurring, "; "))
+		report = append(report, "FAIL recurring trigger: no schedule, or push or release on the default branch, in "+strings.Join(notRecurring, "; "))
 	} else {
 		report = append(report, "PASS recurring trigger: "+strings.Join(recurring, "; "))
-	}
-	if len(unpinned) > 0 {
-		result = gemara.Failed
-		report = append(report, "FAIL actions pinned to full commit SHAs: "+strings.Join(unpinned, "; "))
-	} else {
-		report = append(report, "PASS actions pinned to full commit SHAs")
-	}
-	if len(unsafe) > 0 {
-		result = gemara.Failed
-		report = append(report, "FAIL no pull_request_target: "+strings.Join(unsafe, ", "))
-	} else {
-		report = append(report, "PASS no pull_request_target")
+		runResult, runReport := recentRuns(payload, live)
+		result = gemara.UpdateAggregateResult(result, runResult)
+		report = append(report, runReport)
 	}
 	if adhoc := adhocOnlyTool(payload); adhoc != "" {
 		if result == gemara.Passed {
@@ -220,10 +201,93 @@ func singleRunAttestations(payload data.Payload) []string {
 }
 
 type scannerWorkflow struct {
-	path     string
-	triggers []string
-	match    string   // the job and step that run the scanner
-	unpinned []string // uses: not pinned to a full commit SHA, here or in a local workflow it calls
+	path  string
+	on    any    // the workflow's `on:`
+	match string // the job and step that run the scanner
+}
+
+// recentRuns requires a run of a recurring scanner workflow, started by one of
+// its recurring triggers on the default branch, within maxRunAge: a disabled
+// workflow, or a schedule GitHub switched off, has a trigger but no runs. A
+// failing run still counts, since the badge asks for a scan, not a pass.
+func recentRuns(payload data.Payload, workflows []scannerWorkflow) (gemara.Result, string) {
+	var recent, stale, unreadable []string
+	for _, wf := range workflows {
+		runs, err := getWorkflowRuns(&payload, wf.path)
+		if err != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s: %s", wf.path, err))
+			continue
+		}
+		var last *data.WorkflowRun
+		for i, run := range runs {
+			if run.Status == "completed" && slices.Contains(recurringTriggers, run.Event) && (last == nil || run.CreatedAt.After(last.CreatedAt)) {
+				last = &runs[i]
+			}
+		}
+		switch {
+		case last == nil:
+			stale = append(stale, wf.path+" has no completed run from a recurring trigger")
+		case now().Sub(last.CreatedAt) > maxRunAge:
+			stale = append(stale, fmt.Sprintf("%s last ran %s", wf.path, last.CreatedAt.Format(time.DateOnly)))
+		default:
+			recent = append(recent, fmt.Sprintf("%s ran %s (%s, %s) %s", wf.path, last.CreatedAt.Format(time.DateOnly), last.Event, last.Conclusion, last.URL))
+		}
+	}
+	days := int(maxRunAge.Hours() / 24)
+	switch {
+	case len(recent) > 0:
+		return gemara.Passed, fmt.Sprintf("PASS run in the last %d days: %s", days, strings.Join(recent, "; "))
+	case len(unreadable) > 0:
+		return gemara.NeedsReview, "WARN could not read workflow runs: " + strings.Join(append(unreadable, stale...), "; ")
+	}
+	return gemara.Failed, fmt.Sprintf("FAIL run in the last %d days: %s", days, strings.Join(stale, "; "))
+}
+
+// liveTriggers lists the recurring triggers that fire for the default branch:
+// a schedule always does; push only when its branch filters admit the default
+// branch; release always does. With no default branch known, filters are not
+// applied.
+func liveTriggers(on any, defaultBranch string) []string {
+	var live []string
+	filters, _ := on.(map[string]any)
+	for _, trigger := range triggers(on) {
+		if !slices.Contains(recurringTriggers, trigger) {
+			continue
+		}
+		if trigger == "push" && defaultBranch != "" && !pushReaches(filters["push"], defaultBranch) {
+			continue
+		}
+		live = append(live, trigger)
+	}
+	return live
+}
+
+// pushReaches applies a push trigger's branches / branches-ignore filters.
+// A push filtered only by tags or paths does not run on branch pushes unless
+// branches is also given, matching GitHub.
+// shortcut: path.Match, not GitHub's full glob syntax (**, !negation); widen if a project's filter is misread.
+func pushReaches(config any, branch string) bool {
+	filters, _ := config.(map[string]any)
+	matches := func(key string) (bool, bool) {
+		patterns, ok := filters[key].([]any)
+		if !ok {
+			return false, false
+		}
+		for _, p := range patterns {
+			if ok, _ := path.Match(fmt.Sprint(p), branch); ok {
+				return true, true
+			}
+		}
+		return false, true
+	}
+	if hit, set := matches("branches"); set {
+		return hit
+	}
+	if hit, set := matches("branches-ignore"); set {
+		return !hit
+	}
+	_, tagsOnly := filters["tags"]
+	return !tagsOnly
 }
 
 // workflowFile holds only the fields these steps read.
@@ -284,18 +348,11 @@ func scannerWorkflows(payload data.Payload) ([]scannerWorkflow, gemara.Result, s
 			continue
 		}
 		wf := workflows[file.Path]
-		on := triggers(wf.On)
 		// A workflow_call-only workflow is judged by its callers' triggers.
-		if slices.Equal(on, []string{"workflow_call"}) && hasCaller(workflows, file.Path) {
+		if slices.Equal(triggers(wf.On), []string{"workflow_call"}) && hasCaller(workflows, file.Path) {
 			continue
 		}
-		unpinned := unpinnedUses(wf)
-		for _, called := range localCalls(wf) {
-			for _, uses := range unpinnedUses(workflows[called]) {
-				unpinned = append(unpinned, called+": "+uses)
-			}
-		}
-		found = append(found, scannerWorkflow{path: file.Path, triggers: on, match: match[file.Path], unpinned: unpinned})
+		found = append(found, scannerWorkflow{path: file.Path, on: wf.On, match: match[file.Path]})
 	}
 	if len(found) > 0 {
 		return found, gemara.Passed, ""
@@ -389,32 +446,6 @@ func scannerMatch(payload *data.Payload, wf workflowFile, followRemote bool) str
 		}
 	}
 	return ""
-}
-
-// unpinnedUses lists the remote actions and reusable workflows not pinned to
-// a full commit SHA. Local paths, digest-pinned docker images, and pinExempt
-// workflows are skipped.
-func unpinnedUses(wf workflowFile) []string {
-	var unpinned []string
-	check := func(uses string) {
-		switch {
-		case uses == "", strings.HasPrefix(uses, "./"):
-		case strings.HasPrefix(uses, "docker://"):
-			if !strings.Contains(uses, "@sha256:") {
-				unpinned = append(unpinned, uses)
-			}
-		case slices.ContainsFunc(pinExempt, func(p string) bool { return strings.HasPrefix(uses, p) }):
-		case !fullSHA.MatchString(uses):
-			unpinned = append(unpinned, uses)
-		}
-	}
-	for _, name := range jobNames(wf) {
-		check(wf.Jobs[name].Uses)
-		for _, step := range wf.Jobs[name].Steps {
-			check(step.Uses)
-		}
-	}
-	return unpinned
 }
 
 // triggers reads `on:` in any of its three forms: a string, a list, or a map.

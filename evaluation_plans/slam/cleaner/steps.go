@@ -1,10 +1,15 @@
 package cleaner
 
 import (
+	_ "embed"
 	"fmt"
 	"slices"
 	"strings"
 
+	"cuelang.org/go/cue"
+	"cuelang.org/go/cue/cuecontext"
+	cueerrors "cuelang.org/go/cue/errors"
+	cueyaml "cuelang.org/go/encoding/yaml"
 	"github.com/eddie-knight/pvtr-security-slam-review/data"
 	"github.com/gemaraproj/go-gemara"
 	"github.com/goccy/go-yaml"
@@ -119,6 +124,20 @@ func RequiredFieldsPresent(payload data.Payload) (result gemara.Result, message 
 	return gemara.Passed, "Security Insights file has every required field", gemara.High
 }
 
+// RepositoryURLMatches requires repository.url to name the repository under
+// review, so a file copied from another project does not pass as this one's.
+func RepositoryURLMatches(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	want := fmt.Sprintf("https://github.com/%s/%s", payload.Owner, payload.Repo)
+	var got string
+	if payload.Insights.Repository != nil {
+		got = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(string(payload.Insights.Repository.Url)), "/"), ".git")
+	}
+	if !strings.EqualFold(got, want) {
+		return gemara.Failed, fmt.Sprintf("Security Insights repository.url is %q, not the reviewed repository %s", got, want), gemara.High
+	}
+	return gemara.Passed, "Security Insights file has every required field, validates against the v" + schemaVersion + " CUE schema, and describes " + want, gemara.High
+}
+
 func missingFields(doc map[string]any) []string {
 	var missing []string
 	// The schema leaves project optional so a file can inherit it from a parent
@@ -168,4 +187,56 @@ func check(node any, prefix string, segments []string) []string {
 		return nil
 	}
 	return check(value, path, rest)
+}
+
+// schemaCUE is spec/schema.cue from github.com/ossf/security-insights at
+// v2.2.0, the current release.
+//
+//go:embed schema/security-insights-v2.2.0.cue
+var schemaCUE []byte
+
+const schemaVersion = "2.2.0"
+
+// maxSchemaErrors keeps the message readable for a badly broken file.
+const maxSchemaErrors = 10
+
+// ValidatesAgainstSchema runs the file through the specification's own CUE
+// schema, which si-tooling does not: si-tooling only decodes the YAML strictly,
+// so wrong enum values, malformed URLs, emails, and dates pass it.
+func ValidatesAgainstSchema(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if len(payload.InsightsRaw) == 0 {
+		return gemara.Failed, "No Security Insights file content to check", gemara.High
+	}
+	problems, err := schemaProblems(payload.InsightsRaw)
+	if err != nil {
+		return gemara.NeedsReview, "Could not run the Security Insights CUE schema: " + err.Error(), gemara.Low
+	}
+	if len(problems) > 0 {
+		if len(problems) > maxSchemaErrors {
+			problems = append(problems[:maxSchemaErrors], fmt.Sprintf("and %d more", len(problems)-maxSchemaErrors))
+		}
+		return gemara.Failed, fmt.Sprintf("Security Insights file does not validate against the v%s CUE schema: %s", schemaVersion, strings.Join(problems, "; ")), gemara.High
+	}
+	return gemara.Passed, fmt.Sprintf("Security Insights file has every required field and validates against the v%s CUE schema", schemaVersion), gemara.High
+}
+
+// schemaProblems unifies the file with #SecurityInsights and lists every
+// violation; err is a fault in the schema or the YAML, not the file's content.
+func schemaProblems(raw []byte) ([]string, error) {
+	ctx := cuecontext.New()
+	schema := ctx.CompileBytes(schemaCUE)
+	if schema.Err() != nil {
+		return nil, schema.Err()
+	}
+	file, err := cueyaml.Extract("security-insights.yml", raw)
+	if err != nil {
+		return nil, err
+	}
+	value := schema.LookupPath(cue.ParsePath("#SecurityInsights")).Unify(ctx.BuildFile(file))
+	var problems []string
+	for _, e := range cueerrors.Errors(value.Validate(cue.Concrete(true))) {
+		problems = append(problems, strings.TrimPrefix(e.Error(), "#SecurityInsights."))
+	}
+	slices.Sort(problems)
+	return slices.Compact(problems), nil
 }

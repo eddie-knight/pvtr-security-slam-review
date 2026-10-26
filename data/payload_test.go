@@ -19,9 +19,16 @@ func fakeGitHub(t *testing.T, files map[string]string) *github.Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path, ok := strings.CutPrefix(r.URL.Path, "/repos/o/r/contents/")
+		// Files are only served at the head commit, as the plugin reads them.
+		if ok && r.URL.Query().Get("ref") != headSHA {
+			http.Error(w, "wrong ref "+r.URL.Query().Get("ref"), http.StatusBadRequest)
+			return
+		}
 		switch {
 		case r.URL.Path == "/repos/o/r":
 			_, _ = fmt.Fprint(w, `{"default_branch":"main"}`)
+		case r.URL.Path == "/repos/o/r/branches/main":
+			_, _ = fmt.Fprintf(w, `{"name":"main","commit":{"sha":%q}}`, headSHA)
 		case ok && path == "":
 			var entries []string
 			for name := range files {
@@ -54,6 +61,8 @@ func fakeGitHub(t *testing.T, files map[string]string) *github.Client {
 	client.BaseURL, _ = url.Parse(server.URL + "/")
 	return client
 }
+
+const headSHA = "0123456789abcdef0123456789abcdef01234567"
 
 const validInsights = "header:\n  schema-version: 2.2.0\n  url: https://example.com/o/r\n"
 
@@ -223,5 +232,39 @@ func TestValidateMaturityLevel(t *testing.T) {
 				t.Errorf("err = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestLoadPinsHeadCommit(t *testing.T) {
+	p := loadFake(t, map[string]string{"security-insights.yml": validInsights})
+	if p.Commit != headSHA {
+		t.Fatalf("Commit = %q, want %q", p.Commit, headSHA)
+	}
+	tests := map[string]string{
+		"https://github.com/o/r/blob/main/SECURITY.md#x": "https://github.com/o/r/blob/" + headSHA + "/SECURITY.md#x",
+		"https://github.com/O/R/blob/main/docs/a.md":     "https://github.com/o/r/blob/" + headSHA + "/docs/a.md",
+		"https://github.com/o/r/blob/v1.0/SECURITY.md":   "https://github.com/o/r/blob/v1.0/SECURITY.md",
+		"https://github.com/other/r/blob/main/x.md":      "https://github.com/other/r/blob/main/x.md",
+		"https://example.com/o/r/blob/main/x.md":         "https://example.com/o/r/blob/main/x.md",
+	}
+	for in, want := range tests {
+		if got := p.pinned(in); got != want {
+			t.Errorf("pinned(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestValidateTarget(t *testing.T) {
+	for name, vars := range map[string]map[string]any{
+		"owner missing": {"repo": "r"},
+		"repo empty":    {"owner": "o", "repo": " "},
+	} {
+		c := &config.Config{Vars: vars}
+		if err := validateTarget(c); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+	if err := validateTarget(&config.Config{Vars: map[string]any{"owner": "o", "repo": "r"}}); err != nil {
+		t.Errorf("owner and repo set: %v", err)
 	}
 }

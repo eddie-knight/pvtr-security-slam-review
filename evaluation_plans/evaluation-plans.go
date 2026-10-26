@@ -20,6 +20,8 @@ var (
 			cleaner.FileNamedSecurityInsightsYml,
 			cleaner.ValidatesWithSITooling,
 			cleaner.RequiredFieldsPresent,
+			cleaner.ValidatesAgainstSchema,
+			cleaner.RepositoryURLMatches,
 		},
 		"SLAM-CH-01.01": {
 			reusable_steps.HasSecurityInsightsFile,
@@ -37,6 +39,7 @@ var (
 			reusable_steps.HasSecurityInsightsFile,
 			inspector.SelfAssessmentDeclared,
 			inspector.SelfAssessmentResolves,
+			inspector.GemaraCatalogWellFormed,
 			inspector.AIReviewSelfAssessment,
 		},
 		"SLAM-DE-01.01": {
@@ -57,6 +60,7 @@ var (
 			reusable_steps.HasSecurityInsightsFile,
 			cra.SecurityInsightsLinksPresent,
 			cra.SecurityPolicyHasStewardStatement,
+			cra.ReportingChannelsWork,
 			cra.AIReviewReadiness,
 		},
 	}

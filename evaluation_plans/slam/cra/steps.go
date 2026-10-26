@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -32,8 +33,9 @@ const maxDocumentBytes = 24 * 1024
 const collectionScope = "The security policy linked from Security Insights (the repository files in \"candidates\" only when no policy is linked) and, unless scope is out_of_scope, the contributing guide linked from Security Insights, falling back to the repository files in its \"candidates\". HTML pages were reduced to text. Links within those documents were not followed. The badge page asks for no separate readiness checklist document, so none was retrieved."
 
 var (
-	fetchURL       = (*data.Payload).FetchURL
-	getFileContent = (*data.Payload).GetFileContent
+	fetchURL                = (*data.Payload).FetchURL
+	getFileContent          = (*data.Payload).GetFileContent
+	privateReportingEnabled = (*data.Payload).PrivateReportingEnabled
 
 	securityPolicyFiles    = []string{"SECURITY.md", ".github/SECURITY.md", "docs/SECURITY.md"}
 	contributingGuideFiles = []string{"CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md"}
@@ -43,8 +45,11 @@ var (
 // page asks for: the security policy, the contributing guide, and that reports
 // are accepted. An out-of-scope project owes only the security policy.
 func SecurityInsightsLinksPresent(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if note, other := otherSteward(payload); other {
+		return gemara.NeedsReview, note, gemara.Medium
+	}
 	if securityPolicyURL(payload.Insights) == "" {
-		return gemara.Failed, "Security Insights is incomplete for CRA Readiness: project.vulnerability-reporting.policy (or repository.documentation.security-policy) is missing", gemara.High
+		return failed(&payload, "Security Insights is incomplete for CRA Readiness: project.vulnerability-reporting.policy (or repository.documentation.security-policy) is missing")
 	}
 	if policy, _ := securityPolicy(&payload); scopeOf(policy) == outOfScope {
 		return gemara.Passed, "Security Insights links the security policy, which declares the project out of CRA scope", gemara.High
@@ -57,7 +62,7 @@ func SecurityInsightsLinksPresent(payload data.Payload) (result gemara.Result, m
 		problems = append(problems, "project.vulnerability-reporting.reports-accepted is not true")
 	}
 	if len(problems) > 0 {
-		return gemara.Failed, "Security Insights is incomplete for CRA Readiness: " + strings.Join(problems, "; "), gemara.High
+		return failed(&payload, "Security Insights is incomplete for CRA Readiness: "+strings.Join(problems, "; "))
 	}
 	return gemara.Passed, "Security Insights links the security policy and contributing guide and accepts vulnerability reports", gemara.High
 }
@@ -65,12 +70,15 @@ func SecurityInsightsLinksPresent(payload data.Payload) (result gemara.Result, m
 // SecurityPolicyHasStewardStatement checks that the security policy carries
 // the LF CRA stewardship statement, or the out-of-scope sentence, verbatim.
 func SecurityPolicyHasStewardStatement(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if note, other := otherSteward(payload); other {
+		return gemara.NeedsReview, note, gemara.Medium
+	}
 	policy, checked := securityPolicy(&payload)
 	if len(checked) == 0 {
 		if linked := securityPolicyURL(payload.Insights); linked != "" {
-			return gemara.Failed, "The security policy linked from Security Insights could not be retrieved: " + linked, gemara.High
+			return failed(&payload, "The security policy linked from Security Insights could not be retrieved: "+linked)
 		}
-		return gemara.Failed, fmt.Sprintf("No security policy could be retrieved from Security Insights or %s", strings.Join(securityPolicyFiles, ", ")), gemara.High
+		return failed(&payload, fmt.Sprintf("No security policy could be retrieved from Security Insights or %s", strings.Join(securityPolicyFiles, ", ")))
 	}
 	switch scopeOf(policy) {
 	case inScope:
@@ -78,13 +86,106 @@ func SecurityPolicyHasStewardStatement(payload data.Payload) (result gemara.Resu
 	case outOfScope:
 		return gemara.Passed, "The CRA out-of-scope statement appears verbatim in " + policy.Source, gemara.High
 	}
-	return gemara.Failed, "Neither the LF CRA stewardship statement nor the out-of-scope statement appears verbatim in " + strings.Join(checked, ", "), gemara.High
+	return failed(&payload, "Neither the LF CRA stewardship statement nor the out-of-scope statement appears verbatim in "+strings.Join(checked, ", "))
+}
+
+// StewardAddress is where the LF steward takes escalations.
+const StewardAddress = "steward@linuxfoundation.org"
+
+// advisoryForm finds a GitHub private vulnerability reporting link.
+var advisoryForm = regexp.MustCompile(`(?i)github\.com/([\w.-]+)/([\w.-]+)/security/advisories/new`)
+
+// ReportingChannelsWork checks what an in-scope project's documents promise
+// that can be checked without a model: a GitHub private vulnerability
+// reporting link in the policy or Security Insights points at a repository
+// where it is switched on, and the contributing guide names the steward
+// address. An out-of-scope project owes neither.
+func ReportingChannelsWork(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if note, other := otherSteward(payload); other {
+		return gemara.NeedsReview, note, gemara.Medium
+	}
+	policy, _ := securityPolicy(&payload)
+	if scopeOf(policy) == outOfScope {
+		return gemara.Passed, "The project is out of CRA scope; no reporting channel or escalation path is owed", gemara.High
+	}
+	var problems, unchecked []string
+	text := policy.Content + "\n" + deref(payload.Insights.Project.VulnerabilityReporting.Comment)
+	for _, form := range advisoryForm.FindAllStringSubmatch(text, -1) {
+		enabled, err := privateReportingEnabled(&payload, form[1], form[2])
+		switch {
+		case err != nil:
+			unchecked = append(unchecked, fmt.Sprintf("%s/%s: %s", form[1], form[2], err))
+		case !enabled:
+			problems = append(problems, fmt.Sprintf("GitHub private vulnerability reporting is named as a channel but is not enabled on %s/%s", form[1], form[2]))
+		}
+	}
+	contributing := readDocument(&payload, "contributing_guide", candidates(siURL(payload.Insights.Repository.Documentation.ContributingGuide), contributingGuideFiles))
+	if contributing.Source != "" && !strings.Contains(strings.ToLower(contributing.Content), StewardAddress) {
+		problems = append(problems, fmt.Sprintf("the contributing guide %s does not name the steward escalation address %s", contributing.Source, StewardAddress))
+	}
+	if len(problems) > 0 {
+		return failed(&payload, "CRA reporting and escalation channels: "+strings.Join(problems, "; "))
+	}
+	if len(unchecked) > 0 {
+		return gemara.NeedsReview, "Could not check GitHub private vulnerability reporting: " + strings.Join(unchecked, "; "), gemara.Low
+	}
+	return gemara.Passed, "The named reporting channels are enabled and the contributing guide names " + StewardAddress, gemara.High
+}
+
+// lfStewardHosts are the Linux Foundation and the foundations it hosts, whose
+// projects follow the LF CRA guidance.
+// shortcut: the foundations seen so far; add one when its project is marked for review by mistake.
+var lfStewardHosts = []string{"linuxfoundation.org", "cncf.io", "openssf.org", "lfaidata.foundation", "lfenergy.org", "finos.org", "hyperledger.org", "lfdecentralizedtrust.org", "cd.foundation", "openjsf.org", "graphql.org", "pytorch.org"}
+
+// otherSteward reports a project whose Security Insights names a steward
+// outside the LF: it follows that steward's guidance, which the plugin does
+// not know, so it is marked for review rather than judged by the LF's asks.
+// A project with no steward declared is judged as an LF project.
+func otherSteward(payload data.Payload) (string, bool) {
+	steward := payload.Insights.Project.Steward
+	if steward == nil || strings.TrimSpace(steward.Uri) == "" {
+		return "", false
+	}
+	u, err := url.Parse(strings.TrimSpace(steward.Uri))
+	if err != nil {
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, lf := range lfStewardHosts {
+		if host == lf || strings.HasSuffix(host, "."+lf) {
+			return "", false
+		}
+	}
+	return fmt.Sprintf("Security Insights names %s as the project's steward, not the Linux Foundation; check the project against that steward's CRA guidance by hand.%s", steward.Uri, reviewLink(&payload)), true
+}
+
+// failed returns a Failed result with the security policy's link, so the
+// policy can be reviewed by hand.
+func failed(payload *data.Payload, message string) (gemara.Result, string, gemara.ConfidenceLevel) {
+	return gemara.Failed, message + "." + reviewLink(payload), gemara.High
+}
+
+// reviewLink names the declared security policy, else the first SECURITY.md
+// candidate in the repository, else says there is none.
+func reviewLink(payload *data.Payload) string {
+	if linked := securityPolicyURL(payload.Insights); linked != "" {
+		return " Security policy for review: " + linked
+	}
+	for _, path := range securityPolicyFiles {
+		if _, err := getFileContent(payload, path); err == nil {
+			return fmt.Sprintf(" Security policy for review: https://github.com/%s/%s/blob/%s/%s", payload.Owner, payload.Repo, payload.DefaultBranch, path)
+		}
+	}
+	return " No security policy found to review."
 }
 
 // AIReviewReadiness grades whether the steward's asks are met in substance:
 // a real reporting process below the statement and the escalation section.
 // An out-of-scope project owes neither, so its contributing guide is not read.
 func AIReviewReadiness(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if note, other := otherSteward(payload); other {
+		return gemara.NeedsReview, note, gemara.Medium
+	}
 	insights := payload.Insights
 	reporting := insights.Project.VulnerabilityReporting
 	policy, _ := securityPolicy(&payload)
@@ -128,7 +229,11 @@ func AIReviewReadiness(payload data.Payload) (result gemara.Result, message stri
 			sources = append(sources, doc.Source)
 		}
 	}
-	return reusable_steps.AIReview(payload, "cra-readiness-quality", string(raw), sources, packet.Collection.Notes)
+	result, message, confidence = reusable_steps.AIReview(payload, "cra-readiness-quality", string(raw), sources, packet.Collection.Notes)
+	if result == gemara.Failed {
+		message += reviewLink(&payload)
+	}
+	return result, message, confidence
 }
 
 type document struct {

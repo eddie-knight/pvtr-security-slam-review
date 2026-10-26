@@ -158,6 +158,44 @@ func Test_RequiredFieldsPresent(t *testing.T) {
 	}
 }
 
+func Test_ValidatesAgainstSchema(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        string
+		wantResult gemara.Result
+		wantMsg    string
+	}{
+		{"minimal", minimal, gemara.Passed, "validates against the v2.2.0 CUE schema"},
+		{"strimzi", string(strimzi(t)), gemara.Passed, "validates against the v2.2.0 CUE schema"},
+		{"status outside the enum", strings.Replace(minimal, "status: active", "status: sort-of-active", 1), gemara.Failed, "repository.status"},
+		{"malformed date", strings.Replace(minimal, "last-updated: '2026-10-14'", "last-updated: 'October 14'", 1), gemara.Failed, `header."last-updated": invalid value "October 14"`},
+		{"plain-text url", strings.Replace(minimal, "url: https://example.com/security-insights.yml", "url: example.com/security-insights.yml", 1), gemara.Failed, "header.url"},
+		{"unknown field", minimal + "  favourite-colour: blue\n", gemara.Failed, "favourite-colour"},
+		{"no content", "", gemara.Failed, "No Security Insights file content to check"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, msg, _ := ValidatesAgainstSchema(data.Payload{InsightsRaw: []byte(tt.raw)})
+			if result != tt.wantResult || !strings.Contains(msg, tt.wantMsg) {
+				t.Errorf("got (%v, %q), want %v containing %q", result, msg, tt.wantResult, tt.wantMsg)
+			}
+		})
+	}
+}
+
+func Test_RepositoryURLMatches(t *testing.T) {
+	insights, err := si.Load([]byte(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for owner, want := range map[string]gemara.Result{"example": gemara.Passed, "Example": gemara.Passed, "someone-else": gemara.Failed} {
+		payload := data.Payload{Owner: owner, Repo: "example", Insights: *insights}
+		if result, msg, _ := RepositoryURLMatches(payload); result != want {
+			t.Errorf("owner %s: got %v (%s), want %v", owner, result, msg, want)
+		}
+	}
+}
+
 // Strimzi's real file should earn every Cleaner step.
 func Test_StrimziPassesAllSteps(t *testing.T) {
 	raw := strimzi(t)
@@ -166,6 +204,7 @@ func Test_StrimziPassesAllSteps(t *testing.T) {
 		t.Fatalf("si.Load: %v", err)
 	}
 	payload := data.Payload{
+		Owner: "strimzi", Repo: "strimzi-kafka-operator",
 		RootEntries:  []string{"README.md", "security-insights.yml"},
 		Insights:     *insights,
 		InsightsPath: "security-insights.yml",
@@ -175,6 +214,8 @@ func Test_StrimziPassesAllSteps(t *testing.T) {
 		"FileNamedSecurityInsightsYml": FileNamedSecurityInsightsYml,
 		"ValidatesWithSITooling":       ValidatesWithSITooling,
 		"RequiredFieldsPresent":        RequiredFieldsPresent,
+		"ValidatesAgainstSchema":       ValidatesAgainstSchema,
+		"RepositoryURLMatches":         RepositoryURLMatches,
 	} {
 		if result, msg, _ := step(payload); result != gemara.Passed {
 			t.Errorf("%s: got %v (%s), want Passed", name, result, msg)

@@ -6,6 +6,7 @@ import (
 	"html"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 )
 
 const (
-	// Two runs at different times are the least that shows a schedule rather
+	// Runs on two different days are the least that shows a schedule rather
 	// than a one-off publish.
 	minRecurringRuns = 2
 	// The publish workflow runs on every default-branch push; a result older
@@ -76,25 +77,33 @@ func ResultIsRecurring(payload data.Payload) (result gemara.Result, message stri
 	if err != nil {
 		return gemara.NeedsReview, fmt.Sprintf("Could not read grc.store evaluations for %s/%s: %s", namespace, id, err), gemara.Low
 	}
-	runs := map[time.Time]bool{}
+	// Only runs the trusted workflow published from this repository count.
+	repository := payload.Owner + "/" + payload.Repo
+	days := map[string]bool{}
 	var newest time.Time
 	for _, evaluation := range evaluations {
 		runAt, err := time.Parse(time.RFC3339, evaluation.RunAt)
-		if err != nil || !isBaseline(evaluation) {
+		if err != nil || !isBaseline(evaluation) || !trustedSigner(evaluation, repository) {
 			continue
 		}
-		runs[runAt] = true
+		days[runAt.UTC().Format(time.DateOnly)] = true
 		if runAt.After(newest) {
 			newest = runAt
 		}
 	}
-	if len(runs) < minRecurringRuns {
-		return gemara.Failed, fmt.Sprintf("grc.store target %s/%s has %d published OSPS Baseline run(s); a recurring scan needs at least %d", namespace, id, len(runs), minRecurringRuns), gemara.High
+	if len(days) < minRecurringRuns {
+		return gemara.Failed, fmt.Sprintf("grc.store target %s/%s has OSPS Baseline runs published by %s from %s on %d day(s); a recurring scan needs runs on at least %d different days", namespace, id, strings.TrimSuffix(trustedWorkflowPrefix, "/"), repository, len(days), minRecurringRuns), gemara.High
 	}
 	if age := now().Sub(newest); age > maxResultAge {
 		return gemara.Failed, fmt.Sprintf("The newest OSPS Baseline result for %s/%s was published %s, more than %d days ago; the scan is not running", namespace, id, newest.Format(time.DateOnly), int(maxResultAge.Hours()/24)), gemara.High
 	}
-	return gemara.Passed, fmt.Sprintf("grc.store target %s/%s has %d recent OSPS Baseline runs, the newest on %s", namespace, id, len(runs), newest.Format(time.DateOnly)), gemara.High
+	return gemara.Passed, fmt.Sprintf("grc.store target %s/%s has trusted OSPS Baseline runs on %d different days, the newest on %s", namespace, id, len(days), newest.Format(time.DateOnly)), gemara.High
+}
+
+// trustedSigner reports whether the publish workflow signed the run from the
+// repository. grc.store verified the signature; this only reads its record.
+func trustedSigner(evaluation data.GrcStoreEvaluation, repository string) bool {
+	return strings.EqualFold(evaluation.Signer.CallerRepository, repository) && strings.HasPrefix(evaluation.Signer.WorkflowRef, trustedWorkflowPrefix)
 }
 
 // TrustedPublisher requires the target to be bound to this repository by
@@ -116,11 +125,8 @@ func TrustedPublisher(payload data.Payload) (result gemara.Result, message strin
 	if !ok {
 		return gemara.Failed, fmt.Sprintf("grc.store target %s/%s has no published OSPS Baseline evaluation", namespace, id), gemara.High
 	}
-	if !strings.EqualFold(latest.Signer.CallerRepository, repository) {
-		return gemara.Failed, fmt.Sprintf("The latest result for %s/%s was published from %q, not %s", namespace, id, latest.Signer.CallerRepository, repository), gemara.High
-	}
-	if !strings.HasPrefix(latest.Signer.WorkflowRef, trustedWorkflowPrefix) {
-		return gemara.Failed, fmt.Sprintf("The latest result for %s/%s was signed by workflow %q, not the %s publish workflow", namespace, id, latest.Signer.WorkflowRef, strings.TrimSuffix(trustedWorkflowPrefix, "/")), gemara.High
+	if !trustedSigner(latest, repository) {
+		return gemara.Failed, fmt.Sprintf("The latest result for %s/%s was signed by workflow %q from %q, not the %s publish workflow from %s", namespace, id, latest.Signer.WorkflowRef, latest.Signer.CallerRepository, strings.TrimSuffix(trustedWorkflowPrefix, "/"), repository), gemara.High
 	}
 	return gemara.Passed, fmt.Sprintf("grc.store target %s/%s is verified by GitHub OIDC and its latest result was signed by %s from %s", namespace, id, latest.Signer.WorkflowRef, repository), gemara.High
 }
@@ -146,7 +152,7 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 	if err != nil {
 		return gemara.NeedsReview, fmt.Sprintf("Could not read the latest published log for %s/%s: %s; manual review needed", namespace, id, err), gemara.Low
 	}
-	var failed, skipped, unknown []string
+	var failed, skipped, untagged, unknown []string
 	for _, entry := range entries {
 		if !appliesAt(entry, level) {
 			continue
@@ -155,7 +161,11 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 		case entry.Result == gemara.Failed.String():
 			failed = append(failed, entry.Requirement.EntryID)
 		case entry.Result == gemara.Unknown.String():
-			unknown = append(unknown, fmt.Sprintf("%s (%s)", entry.Requirement.EntryID, entry.Message))
+			unknown = append(unknown, unknownControl(entry))
+		case entry.Result == gemara.NotRun.String() && entry.StepsExecuted == 0 && !slices.Contains(entry.Applicability, fmt.Sprintf("maturity-%d", level)):
+			// The scanner skips a control its catalog does not tag with the scan's
+			// level, so a scan at this level cannot evaluate it.
+			untagged = append(untagged, entry.Requirement.EntryID)
 		case entry.Result == gemara.NotRun.String() && entry.StepsExecuted == 0:
 			skipped = append(skipped, entry.Requirement.EntryID)
 		}
@@ -166,8 +176,15 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 	if len(skipped) > 0 {
 		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) did not evaluate %d control(s) that apply at maturity level %d (%s); publish a scan at maturity level %d", namespace, id, latest.LogVersion, len(skipped), level, strings.Join(skipped, ", "), level), gemara.High
 	}
+	var gaps []string
+	if len(untagged) > 0 {
+		gaps = append(gaps, fmt.Sprintf("%d control(s) apply at maturity level %d but the scanner's catalog tags them only for lower levels, so the scan did not evaluate them; check them by hand: %s", len(untagged), level, strings.Join(untagged, ", ")))
+	}
 	if len(unknown) > 0 {
-		return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no failed controls at maturity level %d, but the scanner could not determine %d: %s", namespace, id, latest.LogVersion, level, len(unknown), strings.Join(unknown, "; ")), gemara.Medium
+		gaps = append(gaps, unknownNote(unknown))
+	}
+	if len(gaps) > 0 {
+		return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no failed controls at maturity level %d, but %s", namespace, id, latest.LogVersion, level, strings.Join(gaps, "; ")), gemara.Medium
 	}
 	return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports no failed controls at maturity level %d", namespace, id, latest.LogVersion, level), gemara.High
 }
@@ -175,7 +192,8 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 // AIReviewUncheckedControlEvidence asks the model whether the documentation
 // linked from Security Insights covers the controls at the project's maturity
 // level that the latest published result could not check (Needs Review and
-// Not Run).
+// Not Run). Unknown controls are the scanner erroring, which no document can
+// settle, so they are reported for a re-scan or a hand check instead.
 func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	level, ok := reusable_steps.MaturityLevel(payload)
 	if !ok {
@@ -194,8 +212,12 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 		return gemara.NeedsReview, fmt.Sprintf("Could not read the latest published log for %s/%s: %s; manual review needed", namespace, id, err), gemara.Low
 	}
 	var unchecked []uncheckedControl
+	var unknown []string
 	for _, entry := range entries {
-		if !appliesAt(entry, level) || (entry.Result != gemara.NeedsReview.String() && entry.Result != gemara.NotRun.String() && entry.Result != gemara.Unknown.String()) {
+		if appliesAt(entry, level) && entry.Result == gemara.Unknown.String() {
+			unknown = append(unknown, unknownControl(entry))
+		}
+		if !appliesAt(entry, level) || (entry.Result != gemara.NeedsReview.String() && entry.Result != gemara.NotRun.String()) {
 			continue
 		}
 		unchecked = append(unchecked, uncheckedControl{
@@ -207,6 +229,9 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 		})
 	}
 	if len(unchecked) == 0 {
+		if len(unknown) > 0 {
+			return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d, but %s", namespace, id, latest.LogVersion, level, unknownNote(unknown)), gemara.Medium
+		}
 		return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d", namespace, id, latest.LogVersion, level), gemara.High
 	}
 
@@ -257,7 +282,24 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 			incomplete = append(incomplete, document.URL+" truncated")
 		}
 	}
-	return reusable_steps.AIReview(payload, "defender-unchecked-control-evidence", string(material), sources, incomplete)
+	result, message, confidence = reusable_steps.AIReview(payload, "defender-unchecked-control-evidence", string(material), sources, incomplete)
+	// Only the last step's message reaches the log, so repeat the Unknowns here.
+	if len(unknown) > 0 {
+		message += " Not covered by the AI review: " + unknownNote(unknown)
+		if result == gemara.Passed {
+			result, confidence = gemara.NeedsReview, gemara.Medium
+		}
+	}
+	return result, message, confidence
+}
+
+func unknownControl(entry assessmentLogEntry) string {
+	return fmt.Sprintf("%s (%s)", entry.Requirement.EntryID, entry.Message)
+}
+
+// unknownNote says which controls the scanner could not determine and what to do.
+func unknownNote(unknown []string) string {
+	return fmt.Sprintf("the scanner could not determine %d control(s); re-scan or check them by hand: %s", len(unknown), strings.Join(unknown, "; "))
 }
 
 const evidenceCollectionScope = "The unchecked controls are every Needs Review and Not Run entry in the latest evaluation log published to grc.store whose applicability includes the project's maturity level, which the reviewer supplied as maturity_level. Documentation is the documentation, vulnerability policy and assessment evidence URLs declared in Security Insights, each fetched once with HTML reduced to text and content capped; links inside those documents were not followed. Complete means every declared URL was retrieved, not that the project's documentation is exhaustive."
@@ -333,10 +375,15 @@ func loadLog(payload data.Payload, evaluation data.GrcStoreEvaluation) ([]assess
 	return entries, nil
 }
 
-// appliesAt reports whether a log entry belongs to the level. The catalog
-// lists every level a control applies at, so a Level 1 control lists all three.
+// appliesAt reports whether a log entry belongs to the level. Baseline levels
+// are cumulative, so a control tagged maturity-N applies at N and above: the
+// 2026-08 catalog tags OSPS-BR-07.01 and OSPS-VM-02.01 maturity-1 only.
 func appliesAt(entry assessmentLogEntry, level int) bool {
-	return slices.Contains(entry.Applicability, fmt.Sprintf("maturity-%d", level))
+	return slices.ContainsFunc(entry.Applicability, func(tag string) bool {
+		n, ok := strings.CutPrefix(tag, "maturity-")
+		lowest, err := strconv.Atoi(n)
+		return ok && err == nil && lowest >= 1 && lowest <= level
+	})
 }
 
 // grcStoreTargetMissing is the message for steps that need grc_store_target.
