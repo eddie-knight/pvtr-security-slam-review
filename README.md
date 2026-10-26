@@ -1,14 +1,97 @@
 # pvtr-security-slam-review
 
-A [Privateer](https://privateerproj.com) plugin that checks a GitHub repository's evidence for the
-[Security Slam](https://securityslam.com/library) Fall 2026 project badges, starting from its
-Security Insights file.
+This is the scanner we use to review [Security Slam](https://securityslam.com/library) Fall 2026
+badge submissions. You can run it on your own project to see what a reviewer will see before you submit.
 
-Each badge runs deterministic steps first: the evidence exists and is in the right shape, and a
-missing piece fails straight away. Badges with written evidence then run an AI review of its
-quality, which only happens when the fixed checks did not fail.
+## What it does
 
-| Badge | Requirement | Deterministic | AI review |
+For each Slam badge (Cleaner, Chronicler, Mechanizer, Inspector, Defender, CRA Readiness) it
+gathers the evidence your repository offers, starting from your Security Insights file, and
+reports what it found. **It does not award badges.** Every result, AI verdicts included, is a
+finding for a human reviewer to read.
+
+Each badge runs fixed checks first: does the evidence exist, and is it in the right shape. Badges
+with written evidence then get an AI review of its quality, but only when the fixed checks did not fail.
+
+## Prerequisites
+
+- **Go** (the version in [go.mod](go.mod)).
+- **[`pvtr`](https://privateerproj.com)**, the Privateer CLI, if you want to run it as a plugin. Not needed for `go run . debug`.
+- **A GitHub token** that can read public repositories.
+- **An Anthropic API key** (optional). Only the AI review steps use it: Chronicler, Inspector,
+  Defender's written-evidence step, and CRA Readiness. Without a key those steps return
+  **Needs Review**. Cleaner, Mechanizer, and every fixed check run without it.
+
+## Configure
+
+Save this as `config.yml` (it is git-ignored, so your token stays local):
+
+```yaml
+loglevel: info
+write-directory: evaluation_results
+output: yaml
+targets:
+  my-project:
+    plugin: local/security-slam # the name pvtr gives a locally installed plugin
+    policy:
+      catalogs:
+        - security-slam-fall-2026
+      applicability: # the badges you are going for; unlisted badges are skipped, not failed
+        - cleaner
+        - chronicler
+        - mechanizer
+        - inspector
+        - defender
+        - cra-readiness
+    vars:
+      owner: <github org or user>
+      repo: <github repo>
+      token: <github token>
+      maturity_level: 1 # Sandbox = 1, Incubating = 2, Graduated = 3
+      grc_store_target: <namespace>/<target> # Defender only: where your pvtr-publish-results workflow publishes
+      # Optional AI review:
+      ai_provider: anthropic
+      ai_model: claude-sonnet-5-5
+      ai_api_key: <anthropic api key>
+```
+
+`maturity_level` is required when Chronicler or Defender is listed; the target fails to load
+without it. Without `grc_store_target`, Defender returns Needs Review. See
+[example-config.yml](example-config.yml) for every option.
+
+## Run
+
+```sh
+go run . debug --target=my-project -c config.yml
+```
+
+Results print to the terminal and are written under `evaluation_results/`.
+
+To run through Privateer instead, `make build`, then `pvtr install --local ./security-slam` and
+`pvtr run`. Note that `pvtr run --target` currently runs every target in the config, not just
+the one you name, so use `go run . debug --target` when you want one.
+
+## Reading results
+
+- **Passed**: the evidence is there and, where AI review applies, it holds up.
+- **Failed**: something is missing or wrong, and the message says what.
+- **Needs Review**: the scanner could not decide (no AI key, a low-confidence AI verdict, a link
+  it could not fetch, or a Defender control the OSPS Baseline scanner leaves to a human). A
+  reviewer will look at it; you can help by making the evidence easy to find.
+
+Two things worth knowing:
+
+- **Stale scanner results.** Defender reads your latest OSPS Baseline result from grc.store. If it
+  was published with a scanner older than v0.33.1, some failures are scanner bugs fixed in that
+  release, not problems in your project. Those are named as stale scanner results; re-publish
+  with v0.33.1 or later to clear them.
+- **Finding your Security Insights file.** The file is located with
+  [si-tooling](https://github.com/ossf/si-tooling): `security-insights.yml` or `.yaml`, at the
+  repository root or in `.github/`, on the default branch. Keep only one per location.
+
+## What each badge checks
+
+| Badge | Requirement | Fixed checks | AI review |
 |---|---|---|---|
 | Cleaner | SLAM-CL-01.01 | a Security Insights file found by si-tooling (`security-insights.yml` or `.yaml`, at the root or in `.github/`, plus the legacy names si-tooling accepts), and only one per location; si-tooling strict load; spec-required fields present; validates against the spec's v2.2.0 CUE schema; `repository.url` is the reviewed repository | none |
 | Chronicler | SLAM-CH-01.01 | Level 1 documentation links declared; every link resolves; the OSPS Baseline scanner's steps for the documentation-shaped DO, GV, and VM controls do not fail at `maturity_level` (controls the scanner leaves at Needs Review are reported, not blocking) | each doc is real and covers its topic; an index page linking to usage guides counts as a user guide |
@@ -18,20 +101,10 @@ quality, which only happens when the fixed checks did not fail.
 | Defender | SLAM-DE-01.02 | latest published result has no failed controls at the project's maturity level (levels are cumulative), and the scan ran at that level; controls the scanner's catalog tags only for lower levels, and Unknown controls, are marked for review; the scanner version is reported, and results from scanners older than v0.33.1 showing the bugs fixed there (QA-05.01/05.02 Unknown, BR-01.01 workflow parse errors, BR-07.01/VM-02.01 skipped) are marked as stale scanner results, not project failures | written evidence for Needs Review and Not Run controls |
 | CRA Readiness | SLAM-CR-01.01 | policy and contributing links; LF stewardship (or out-of-scope) statement verbatim in the linked policy (SECURITY.md when none is linked); a named GitHub private reporting channel is enabled; the contributing guide names `steward@linuxfoundation.org`. A steward outside the LF is marked for review; failures link the security policy | reporting process and steward escalation |
 
-Every result is a finding for the reviewer to read, AI verdicts included; the plugin does not award badges.
-Repository files and this repository's default-branch blob links are read at the branch head when the run starts; the result's target `version` records that commit.
-A target that cannot load (empty `owner` or `repo`, bad `maturity_level`) logs an error and exits non-zero.
+## Getting help
 
-Defender reads the public grc.store hub API (`https://hub.grc.store`, override with `grc_store_url`).
+Questions or a result you think is wrong: open an issue on
+[eddie-knight/pvtr-security-slam-review](https://github.com/eddie-knight/pvtr-security-slam-review/issues).
+Include the badge, the requirement ID (for example `SLAM-CL-01.01`), and the message you got.
 
-## Running
-
-```sh
-make build
-./security-slam debug --service <service_name> -c config.yml
-```
-
-See [example-config.yml](example-config.yml). Pick badges with `policy.applicability`. Without
-`ai_provider`, `ai_model`, and `ai_api_key`, the AI steps return Needs Review, as do low-confidence AI verdicts.
-Chronicler and Defender need `maturity_level` (1-3), set by whoever runs the review; the project does not choose it.
-Defender also needs `grc_store_target` (`<namespace>/<target>`, the target the project's pvtr-publish-results workflow publishes to); without it the Defender steps return Needs Review.
+For everything else about the Slam (badges, dates, submitting), see [securityslam.com](https://securityslam.com).
