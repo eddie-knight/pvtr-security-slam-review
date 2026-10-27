@@ -153,12 +153,16 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 	if err != nil {
 		return gemara.NeedsReview, fmt.Sprintf("Could not read the latest published log for %s/%s: %s; manual review needed", namespace, id, err), gemara.Low
 	}
-	var failed, skipped, untagged, unknown, stale []string
+	var failed, skipped, untagged, unknown, stale, exempted []string
 	for _, entry := range entries {
 		if !appliesAt(entry, level) {
 			continue
 		}
 		switch {
+		case exempt(entry):
+			if entry.Result != gemara.Passed.String() {
+				exempted = append(exempted, fmt.Sprintf("%s %s", entry.Requirement.EntryID, entry.Result))
+			}
 		case staleFinding(latest, entry):
 			stale = append(stale, fmt.Sprintf("%s %s", entry.Requirement.EntryID, entry.Result))
 		case entry.Result == gemara.Failed.String():
@@ -178,11 +182,12 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 	if len(stale) > 0 {
 		staleSuffix = "; separately, " + staleNote(latest, stale)
 	}
+	exemptSuffix := exemptNote("; ", exempted)
 	if len(failed) > 0 {
-		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports %d failed control(s) at maturity level %d: %s", namespace, id, resultLabel(latest), len(failed), level, strings.Join(failed, ", ")) + staleSuffix, gemara.High
+		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports %d failed control(s) at maturity level %d: %s", namespace, id, resultLabel(latest), len(failed), level, strings.Join(failed, ", ")) + staleSuffix + exemptSuffix, gemara.High
 	}
 	if len(skipped) > 0 {
-		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) did not evaluate %d control(s) that apply at maturity level %d (%s); publish a scan at maturity level %d", namespace, id, resultLabel(latest), len(skipped), level, strings.Join(skipped, ", "), level) + staleSuffix, gemara.High
+		return gemara.Failed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) did not evaluate %d control(s) that apply at maturity level %d (%s); publish a scan at maturity level %d", namespace, id, resultLabel(latest), len(skipped), level, strings.Join(skipped, ", "), level) + staleSuffix + exemptSuffix, gemara.High
 	}
 	var gaps []string
 	if len(untagged) > 0 {
@@ -195,9 +200,9 @@ func LatestResultHasNoFailures(payload data.Payload) (result gemara.Result, mess
 		gaps = append(gaps, staleNote(latest, stale))
 	}
 	if len(gaps) > 0 {
-		return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no failed controls at maturity level %d, but %s", namespace, id, resultLabel(latest), level, strings.Join(gaps, "; ")), gemara.Medium
+		return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no failed controls at maturity level %d, but %s", namespace, id, resultLabel(latest), level, strings.Join(gaps, "; ")) + exemptSuffix, gemara.Medium
 	}
-	return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports no failed controls at maturity level %d", namespace, id, resultLabel(latest), level), gemara.High
+	return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) reports no failed controls at maturity level %d", namespace, id, resultLabel(latest), level) + exemptSuffix, gemara.High
 }
 
 // AIReviewUncheckedControlEvidence asks the model whether the documentation
@@ -223,8 +228,15 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 		return gemara.NeedsReview, fmt.Sprintf("Could not read the latest published log for %s/%s: %s; manual review needed", namespace, id, err), gemara.Low
 	}
 	var unchecked []uncheckedControl
-	var unknown, stale []string
+	var unknown, stale, exempted []string
 	for _, entry := range entries {
+		if appliesAt(entry, level) && exempt(entry) {
+			// Failed ones are LatestResultHasNoFailures' to report.
+			if entry.Result != gemara.Passed.String() && entry.Result != gemara.Failed.String() {
+				exempted = append(exempted, fmt.Sprintf("%s %s", entry.Requirement.EntryID, entry.Result))
+			}
+			continue
+		}
 		if appliesAt(entry, level) && staleFinding(latest, entry) {
 			stale = append(stale, fmt.Sprintf("%s %s", entry.Requirement.EntryID, entry.Result))
 			continue
@@ -250,11 +262,12 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 	if len(stale) > 0 {
 		notes = append(notes, staleNote(latest, stale))
 	}
+	exemptSuffix := exemptNote("; ", exempted)
 	if len(unchecked) == 0 {
 		if len(notes) > 0 {
-			return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d, but %s", namespace, id, resultLabel(latest), level, strings.Join(notes, "; ")), gemara.Medium
+			return gemara.NeedsReview, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d, but %s", namespace, id, resultLabel(latest), level, strings.Join(notes, "; ")) + exemptSuffix, gemara.Medium
 		}
-		return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d", namespace, id, resultLabel(latest), level), gemara.High
+		return gemara.Passed, fmt.Sprintf("The latest OSPS Baseline result for %s/%s (%s) has no Needs Review or Not Run controls at maturity level %d", namespace, id, resultLabel(latest), level) + exemptSuffix, gemara.High
 	}
 
 	targetPage := fmt.Sprintf("https://grc.store/targets/%s/%s", namespace, id)
@@ -313,7 +326,7 @@ func AIReviewUncheckedControlEvidence(payload data.Payload) (result gemara.Resul
 			result, confidence = gemara.NeedsReview, gemara.Medium
 		}
 	}
-	return result, message, confidence
+	return result, message + exemptNote(" ", exempted), confidence
 }
 
 func unknownControl(entry assessmentLogEntry) string {
@@ -351,6 +364,20 @@ func staleFinding(evaluation data.GrcStoreEvaluation, entry assessmentLogEntry) 
 		return entry.Result == gemara.NotRun.String() && entry.StepsExecuted == 0
 	}
 	return false
+}
+
+// exempt reports whether the entry is an OSPS-QA-03 control, which the Security
+// Slam exempts from Mechanizer and Defender (announced to participants in Slack).
+func exempt(entry assessmentLogEntry) bool {
+	return strings.HasPrefix(entry.Requirement.EntryID, "OSPS-QA-03.")
+}
+
+// exemptNote appends sep and the ignored OSPS-QA-03 results, if there are any.
+func exemptNote(sep string, exempted []string) string {
+	if len(exempted) == 0 {
+		return ""
+	}
+	return sep + "OSPS-QA-03 is exempt for the Security Slam, so these result(s) were ignored: " + strings.Join(exempted, ", ")
 }
 
 // staleNote marks stale scanner results as such, not as project failures.

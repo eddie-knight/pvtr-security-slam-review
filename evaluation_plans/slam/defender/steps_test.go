@@ -109,8 +109,8 @@ func payloadWithTarget(target string) data.Payload {
 
 type step func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel)
 
-// Strimzi is the reference project: it earns SLAM-DE-01.01 and, with one
-// failed control, does not yet earn SLAM-DE-01.02.
+// Strimzi is the reference project: it earns SLAM-DE-01.01, and its one failed
+// control is the exempt OSPS-QA-03.01, so only stale results hold back SLAM-DE-01.02.
 func Test_Strimzi(t *testing.T) {
 	strimziHub(t).install(t)
 	payload := strimziPayload(t)
@@ -125,9 +125,9 @@ func Test_Strimzi(t *testing.T) {
 		}
 	}
 	result, message, _ := LatestResultHasNoFailures(payload)
-	want := "The latest OSPS Baseline result for strimzi/strimzi-kafka-operator (1.3.0-20261025T171208Z, scanner 0.33.0) reports 1 failed control(s) at maturity level 2: OSPS-QA-03.01; separately, 2 result(s) are stale scanner results, not project failures: scanner 0.33.0 predates the fixes in v0.33.1, so re-publish with v0.33.1 or later: OSPS-BR-07.01 Not Run, OSPS-VM-02.01 Not Run"
-	if result != gemara.Failed || message != want {
-		t.Errorf("LatestResultHasNoFailures = %v %q, want Failed %q", result, message, want)
+	want := "The latest OSPS Baseline result for strimzi/strimzi-kafka-operator (1.3.0-20261025T171208Z, scanner 0.33.0) has no failed controls at maturity level 2, but 2 result(s) are stale scanner results, not project failures: scanner 0.33.0 predates the fixes in v0.33.1, so re-publish with v0.33.1 or later: OSPS-BR-07.01 Not Run, OSPS-VM-02.01 Not Run; OSPS-QA-03 is exempt for the Security Slam, so these result(s) were ignored: OSPS-QA-03.01 Failed"
+	if result != gemara.NeedsReview || message != want {
+		t.Errorf("LatestResultHasNoFailures = %v %q, want Needs Review %q", result, message, want)
 	}
 }
 
@@ -261,6 +261,7 @@ const (
 	// staleBinaryScan and staleWorkflowParse are the scanner bugs fixed in
 	// v0.33.1 (#519, #520), as an older scanner published them.
 	staleBinaryScan    = `{"requirement":{"entry-id":"OSPS-QA-05.01"},"result":"Unknown","message":"Error while scanning repository for binaries, potentially due to repo size. See logs for details.","applicability":["maturity-1","maturity-2","maturity-3"],"steps-executed":1}`
+	failedQA03         = `{"requirement":{"entry-id":"OSPS-QA-03.01"},"result":"Failed","applicability":["maturity-2","maturity-3"],"steps-executed":1}`
 	staleWorkflowParse = `{"requirement":{"entry-id":"OSPS-BR-01.01"},"result":"Needs Review","message":"Unable to evaluate 1 of 9 workflow files, manual review required: .github/workflows/x.yml (x.yml:3:3: unexpected key \"queue\" for \"concurrency\" section [syntax-check])","applicability":["maturity-1","maturity-2","maturity-3"],"steps-executed":1}`
 )
 
@@ -288,6 +289,8 @@ func Test_LatestResultHasNoFailures(t *testing.T) {
 		{"stale workflow parse error", 2, logWith(passedL1, staleWorkflowParse), nil, gemara.NeedsReview, "OSPS-BR-01.01 Needs Review", ""},
 		{"binary scan Unknown from a fixed scanner", 2, logWith(passedL1, staleBinaryScan), nil, gemara.NeedsReview, "re-scan or check them by hand: OSPS-QA-05.01", "0.33.1"},
 		{"unknown scanner version is not judged stale", 2, logWith(passedL1, staleBinaryScan), nil, gemara.NeedsReview, "scanner unknown) has no failed controls at maturity level 2, but the scanner could not determine", "-"},
+		{"exempt QA-03.01 is the only failure", 2, logWith(passedL1, failedQA03), nil, gemara.Passed, "reports no failed controls at maturity level 2; OSPS-QA-03 is exempt for the Security Slam, so these result(s) were ignored: OSPS-QA-03.01 Failed", ""},
+		{"exempt QA-03.01 beside a real failure", 2, logWith(failedQA03, failedL1), nil, gemara.Failed, "reports 1 failed control(s) at maturity level 2: OSPS-VM-02.01; OSPS-QA-03 is exempt for the Security Slam, so these result(s) were ignored: OSPS-QA-03.01 Failed", ""},
 		{"log unreadable", 2, nil, errors.New("boom"), gemara.NeedsReview, "boom", ""},
 		{"level missing", nil, logWith(passedL1), nil, gemara.NeedsReview, "maturity_level", ""},
 		{"level out of range", 4, logWith(passedL1), nil, gemara.NeedsReview, "maturity_level", ""},
@@ -460,5 +463,19 @@ func Test_AIReviewUncheckedControlEvidence_NothingUnchecked(t *testing.T) {
 	payload := strimziPayload(t)
 	if result, _, _ := AIReviewUncheckedControlEvidence(payload); result != gemara.Passed || client.calls != 0 {
 		t.Errorf("got %v with %d AI calls, want Passed without AI", result, client.calls)
+	}
+}
+
+func Test_AIReviewUncheckedControlEvidence_ExemptQA03(t *testing.T) {
+	h := strimziHub(t)
+	h.log = logWith(passedL1, `{"requirement":{"entry-id":"OSPS-QA-03.02"},"result":"Needs Review","applicability":["maturity-3"],"steps-executed":1}`)
+	h.install(t)
+	client := &fakeAIClient{}
+	stubAIClient(t, client)
+	payload := strimziPayload(t)
+	payload.Config.Vars["maturity_level"] = 3
+	result, message, _ := AIReviewUncheckedControlEvidence(payload)
+	if result != gemara.Passed || client.calls != 0 || !strings.HasSuffix(message, "; OSPS-QA-03 is exempt for the Security Slam, so these result(s) were ignored: OSPS-QA-03.02 Needs Review") {
+		t.Errorf("got %v %q with %d AI calls, want Passed without AI, naming the exempt control", result, message, client.calls)
 	}
 }

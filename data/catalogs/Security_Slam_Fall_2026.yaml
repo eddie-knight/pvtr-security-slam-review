@@ -105,7 +105,8 @@ controls:
           The latest published OSPS Baseline result MUST be evaluated at the
           project's maturity level, MUST report no failed or unknown controls
           at that level, and controls the scanner cannot check MUST have
-          written evidence a reviewer can follow.
+          written evidence a reviewer can follow. OSPS-QA-03 controls are
+          exempt for the Security Slam.
     group: DE
     id: SLAM-DE-01
     objective: |
