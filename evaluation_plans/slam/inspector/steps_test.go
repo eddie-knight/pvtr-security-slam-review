@@ -73,6 +73,7 @@ func TestSelfAssessmentDeclared(t *testing.T) {
 	}{
 		{"evidence url", si.Assessment{Evidence: ptrTo(si.URL(assessmentURL))}, gemara.Passed, assessmentURL},
 		{"comment only quotes the comment", si.Assessment{Comment: "A security self-assessment is in progress but not yet merged or published."}, gemara.Failed, "in progress but not yet merged"},
+		{"draft label with evidence url", draftAssessment, gemara.Passed, assessmentURL},
 		{"name only", si.Assessment{Name: ptrTo("Self assessment")}, gemara.Failed, "does not declare"},
 		{"blank url", si.Assessment{Evidence: ptrTo(si.URL("  "))}, gemara.Failed, "does not declare"},
 		{"nothing", si.Assessment{}, gemara.Failed, "does not declare"},
@@ -156,6 +157,33 @@ func TestAIReviewSelfAssessment(t *testing.T) {
 				t.Errorf("evidence = %+v, want one AI record naming %s", evidence, assessmentURL)
 			}
 		})
+	}
+}
+
+// draftAssessment is declared like ResoArc's: complete content, labelled a draft.
+var draftAssessment = si.Assessment{
+	Name:     ptrTo("Widget security self-assessment (draft)"),
+	Evidence: ptrTo(si.URL(assessmentURL)),
+	Comment:  "In-maintainer-review draft only. This is not a completed baseline assessment.",
+}
+
+// A draft label alone fails nothing deterministic; the AI judges the content,
+// and the rubric tells it a label does not decide completeness.
+func TestAIReviewSelfAssessmentDraftLabel(t *testing.T) {
+	stubFetch(t, data.FetchedURL{StatusCode: 200, Body: []byte("Widget threats: ...")}, nil)
+	client := &fakeAIClient{body: `{"result":"pass","confidence":"high","message":"m","explanation":"Complete Widget self-assessment despite the draft label."}`}
+	stubAIClient(t, client)
+
+	result, _, _ := AIReviewSelfAssessment(newPayload(draftAssessment))
+
+	if result != gemara.Passed {
+		t.Errorf("result = %v, want Passed", result)
+	}
+	if !strings.Contains(client.content, "In-maintainer-review draft only") {
+		t.Errorf("the draft label did not reach the AI: %s", client.content)
+	}
+	if !strings.Contains(client.prompt, `a "draft", "in review", or "work in progress" label`) || !strings.Contains(client.prompt, "does not fail an assessment whose content is reasonably complete") {
+		t.Error("the rubric does not say a draft label alone does not fail")
 	}
 }
 
