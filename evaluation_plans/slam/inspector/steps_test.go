@@ -110,7 +110,7 @@ func TestSelfAssessmentResolves(t *testing.T) {
 }
 
 func TestAIReviewSelfAssessment(t *testing.T) {
-	const passBody = `{"result":"pass","confidence":"high","message":"Self-assessment covers all five topics","explanation":"Each topic is addressed for Widget.","citations":["` + assessmentURL + `"]}`
+	const passBody = `{"result":"pass","confidence":"high","message":"Project-specific self-assessment","explanation":"It assesses Widget's own threats.","citations":["` + assessmentURL + `"]}`
 	tests := []struct {
 		name         string
 		fetched      data.FetchedURL
@@ -236,12 +236,12 @@ func TestAIReviewSelfAssessmentFollowsLinks(t *testing.T) {
 }
 
 func TestAIReviewSelfAssessmentOutsideRepository(t *testing.T) {
-	const passBody = `{"result":"pass","confidence":"high","message":"m","explanation":"Covers all five topics."}`
+	const passBody = `{"result":"pass","confidence":"high","message":"m","explanation":"Assesses Widget's own threats."}`
 	stubFetch(t, data.FetchedURL{StatusCode: 200, Body: []byte("# Widget self-assessment")}, nil)
 	stubAIClient(t, &fakeAIClient{body: passBody})
 	const elsewhere = "https://docs.example.com/widget/security-assessment"
 	result, message, _ := AIReviewSelfAssessment(newPayload(si.Assessment{Evidence: ptrTo(si.URL(elsewhere))}))
-	if result != gemara.NeedsReview || !strings.Contains(message, "not committed to example/widget") || !strings.Contains(message, "Covers all five topics.") {
+	if result != gemara.NeedsReview || !strings.Contains(message, "not committed to example/widget") || !strings.Contains(message, "Assesses Widget's own threats.") {
 		t.Errorf("got %v %q, want NeedsReview keeping the verdict and noting the location", result, message)
 	}
 }

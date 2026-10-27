@@ -73,9 +73,8 @@ controls:
           it from repository.security.assessments.self in Security Insights.
         state: Active
         text: |
-          Security Insights MUST reference a resolvable self-assessment that is
-          specific to the project and covers scope, governance, threats,
-          vulnerability management, and supply chain.
+          Security Insights MUST reference a resolvable threat assessment or
+          security self-assessment that is specific to the project.
     group: IN
     id: SLAM-IN-01
     objective: |
