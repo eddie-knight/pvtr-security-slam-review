@@ -32,7 +32,6 @@ var (
 	RequiredVars = []string{
 		"owner",
 		"repo",
-		"token",
 	}
 	//go:embed data/catalogs
 	files   embed.FS

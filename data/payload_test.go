@@ -282,15 +282,30 @@ func TestLoadPinsHeadCommit(t *testing.T) {
 
 func TestValidateTarget(t *testing.T) {
 	for name, vars := range map[string]map[string]any{
-		"owner missing": {"repo": "r"},
-		"repo empty":    {"owner": "o", "repo": " "},
+		"owner missing": {"repo": "r", "token": "t"},
+		"repo empty":    {"owner": "o", "repo": " ", "token": "t"},
+		"token missing": {"owner": "o", "repo": "r"},
 	} {
 		c := &config.Config{Vars: vars}
 		if err := validateTarget(c); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 	}
-	if err := validateTarget(&config.Config{Vars: map[string]any{"owner": "o", "repo": "r"}}); err != nil {
-		t.Errorf("owner and repo set: %v", err)
+	if err := validateTarget(&config.Config{Vars: map[string]any{"owner": "o", "repo": "r", "token": "t"}}); err != nil {
+		t.Errorf("owner, repo and token set: %v", err)
+	}
+}
+
+func TestUseEnvToken(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "from-env")
+	c := &config.Config{}
+	useEnvToken(c)
+	if got := c.GetString("token"); got != "from-env" {
+		t.Errorf("unset token: got %q, want from-env", got)
+	}
+	c = &config.Config{Vars: map[string]any{"token": "from-config"}}
+	useEnvToken(c)
+	if got := c.GetString("token"); got != "from-config" {
+		t.Errorf("config token: got %q, want from-config", got)
 	}
 }

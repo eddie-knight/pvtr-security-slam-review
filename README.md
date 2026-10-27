@@ -46,7 +46,7 @@ targets:
     vars:
       owner: <github org or user>
       repo: <github repo>
-      token: <github token>
+      token: <github token> # or leave unset and export GITHUB_TOKEN
       maturity_level: 1 # Sandbox = 1, Incubating = 2, Graduated = 3
       grc_store_target: <namespace>/<target> # Defender only: where your pvtr-publish-results workflow publishes
       # Optional AI review:

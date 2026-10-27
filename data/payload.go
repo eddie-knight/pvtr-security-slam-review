@@ -204,6 +204,7 @@ var discoverInsights = si.Discover
 // A target that cannot load is logged as an error, so its log never reads as
 // a clean run.
 func Loader(config *config.Config) (payload any, err error) {
+	useEnvToken(config)
 	p := newPayload(config)
 	err = validateTarget(config)
 	if err == nil {
@@ -225,7 +226,24 @@ func validateTarget(c *config.Config) error {
 			return fmt.Errorf("%s is empty", name)
 		}
 	}
+	if c.GetString("token") == "" {
+		return errors.New("token is empty: set vars.token or GITHUB_TOKEN")
+	}
 	return validateMaturityLevel(c)
+}
+
+// useEnvToken fills an unset vars.token from GITHUB_TOKEN, which the SDK
+// cannot do: its PVTR_* env overrides never reach keys inside vars
+// (privateerproj/privateer-sdk#343).
+func useEnvToken(c *config.Config) {
+	token := os.Getenv("GITHUB_TOKEN")
+	if c.GetString("token") != "" || token == "" {
+		return
+	}
+	if c.Vars == nil {
+		c.Vars = map[string]any{}
+	}
+	c.Vars["token"] = token
 }
 
 // maturityBadges are the badges whose checks depend on maturity_level.
